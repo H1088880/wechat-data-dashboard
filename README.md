@@ -56,6 +56,19 @@
 
 可以把上面 4 步连同链接一起发给对方，让对方的 Agent 照做——这是目前最接近"给链接就能用"的方式。纯云端聊天 AI（不能访问你的电脑）即使拿到链接也打不开本机软件。
 
+## 装完先自检（一条命令）
+
+```bash
+python scripts/preflight.py --imports
+```
+
+它核对必需文件、扫出"被 `import` 但没打包"的模块、逐个模块试导入，最后报告第三方依赖状态。
+**看到 `结论：✓ 包是完整的` 才继续**；报错会直接点名缺哪个文件。
+
+> 为什么需要这个：本包曾经漏打包 `keycap.py` / `wcdb_ctx.py`（密钥提取的两个核心模块），
+> 表现却很迷惑——页面能打开、能探测到 20 个加密库，就是永远停在"但是要密钥"，
+> 提示还写成"微信版本/权限限制"。自检能在装完第一时间把这类问题顶出来。
+
 ## 目录
 
 ```
@@ -66,9 +79,13 @@ assets/app/              完整可运行代码（已脱敏）
   启动大屏-Windows.bat      Windows 双击入口
   启动大屏-Mac-Linux.command Mac/Linux 入口
   server.py 等            服务与核心模块
+  keycap.py              密钥捕获入口（按平台分发）
+  wcdb_ctx.py            SQLCipher codec 上下文解析 + 密钥校验
+  wxkey_extract.py       Windows 进程内存后端
+  sample.py              示例库生成（没微信也能先看效果）
   templates/              解密入口页 + 全屏大屏页
 references/              架构 / 踩坑 / 平台授权
-scripts/                 环境探测 / 隐私扫描
+scripts/                 完整性自检 / 环境探测 / 隐私扫描
 ```
 
 ## 隐私声明

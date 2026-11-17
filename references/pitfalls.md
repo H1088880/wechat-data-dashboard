@@ -105,3 +105,37 @@
 - docx 用 `digest_docx.py` 零依赖生成（标准库 zipfile + 最小 OOXML），不装 python-docx，跨平台。
 
 **验证**：搜 ≥3 字关键词应 <0.2s 且 `source=index`；`/api/digest?q=关键词` 返回合法 docx（zip 完整、XML 可解析、中文名正确）。
+
+## 12. 对方 clone 后"一键提取密钥"永远失败（漏打包 + 走了单密钥老路径）
+
+**症状**：别人 clone 仓库、装好、能打开解密入口页，也**能**探测到加密库（"已找到加密数据库（20 个）"），
+但一点"⚡ 一键探测 + 解密 + 加载"就停在"但是要密钥"；点"🔑 从微信进程提取"也不出密钥，
+提示只有一句"未能自动提取（微信版本/权限限制）"——像版本不兼容，其实是包里没代码。
+
+**根因（两层，叠加才会这么难查）**：
+1. **漏打包**：`keycap.py`、`wcdb_ctx.py` 没进仓库（也不在 git 历史里）。前者是跨平台密钥捕获入口，
+   后者是 SQLCipher codec 上下文解析 + 页 1 HMAC 校验的全部实现。缺了它们，
+   `decrypt.extract_keys_v4()` → `import keycap` 直接 ImportError，一键提取必然失败。
+   同理漏掉的还有 `sample.py`（`/api/sample` 示例库），少了"先看效果"这条路。
+2. **入口接错**：`/api/key-extract` 和 `/api/auto` 原本走 `decrypt.extract_key_from_process()`
+   —— 老的 Windows-only 高熵暴力扫描，`os.name != "nt"` 直接 `return None`，且**只能出一个 key**。
+   而 4.x 每个 `.db` 有自己的 salt + key，单 key 最多解开 1 个库。于是即便有密钥，
+   20 个库里 19 个也解不开。真正正确的链路（`accounts.decrypt_account` → `extract_keys_v4` →
+   `decrypt_account_v4` 按 salt 逐库取 key）一直存在，只是没接到按钮上。
+
+**修复**：
+- 补齐三个模块；`/api/key-extract` 改走 `accounts.ensure_keys()`（逐库 key + 写入 keyring），
+  老的暴力扫描降级为兜底；`/api/auto` 不带 key 时不再直接甩"需要密钥"，而是起
+  `start_decrypt_account()`（keyring 复用 → 缺的补提取 → 逐库解密）。
+- 前端把真实 `reason` 显示出来（以前一律写"微信版本/权限限制"，缺模块/未登录/权限不足全长得一样，只能靠猜）。
+- 新增 `scripts/preflight.py`：必需文件清单 + 扫"被 import 但没打包"的模块 + 逐模块 import。
+  发布前必跑；缺文件时它会直接点名 `keycap.py` / `wcdb_ctx.py`。
+
+**验证**（干净副本、空 keyring）：
+`python scripts/preflight.py --imports` 22 个模块全绿；
+`GET /api/key-extract` 从运行中的微信进程提取到 44 个逐库密钥；
+拿其中 2 个库跑 `decrypt_account_v4` → `2/2 OK`，产物 `sqlite_master` 可读。
+
+**教训**：打包只能**整目录 copy**，不要按白名单挑 `.py`；每加一个模块就把它写进 `preflight.py`
+的必需清单。另一个教训：入口函数要指向"最新的那条链路"，老实现别留着当门面——
+留着就必须在 UI 上把失败原因透出来。

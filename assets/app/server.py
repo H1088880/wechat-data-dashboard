@@ -358,6 +358,59 @@ def invalidate_stats(path):
                                   "emojis": [], "building": True, "stale": True}
 
 
+def _account_for_msg_dir(msg_dir):
+    """把加密源库目录映射成 accounts 里的账号标识（keyring 以它做命名空间）。"""
+    try:
+        want = os.path.normcase(os.path.abspath(msg_dir))
+        for row in acctmod.list_accounts():
+            d = row.get("msg_dir") or ""
+            if d and os.path.normcase(os.path.abspath(d)) == want:
+                return row.get("account")
+    except Exception:
+        pass
+    return os.path.basename((msg_dir or "").rstrip("/\\")) or None
+
+
+def start_decrypt_account(account, msg_dir):
+    """后台：走微信 4.x 的正确路径 —— keyring 逐库密钥 → 缺的从进程只读补提取 → 逐库解密。
+
+    为什么不能只用一个密钥：4.x 里**每个 .db 有自己的 salt + 32 字节 key**，
+    单密钥最多解开其中一个库，其余 19 个会全部失败（旧 /api/auto 就是这样）。
+    """
+    with _DECRYPT_LOCK:
+        if _DECRYPT["running"]:
+            return False
+        _DECRYPT.update({"running": True, "done": 0, "total": 0, "current": "",
+                         "ok": 0, "error": None, "needs_key": False,
+                         "dir": msg_dir, "out_dir": "",
+                         "started_at": __import__("time").time(), "finished": False})
+
+    def progress(idx, total, name):
+        _DECRYPT.update({"done": idx, "total": total, "current": name})
+
+    def worker():
+        try:
+            res = acctmod.decrypt_account(account, progress=progress)
+            if res.get("ok"):
+                out = res.get("out_dir")
+                if out and os.path.isdir(out):
+                    get_db(out)
+                    ensure_conv_cache(out)
+                _DECRYPT.update({"ok": res.get("ok_count") or 0,
+                                 "error": None, "out_dir": out or ""})
+            else:
+                err = res.get("error") or "解密失败"
+                _DECRYPT.update({"error": err,
+                                 "needs_key": ("密钥" in err)})
+        except Exception as e:
+            _DECRYPT.update({"error": str(e)})
+        finally:
+            _DECRYPT.update({"running": False, "finished": True})
+
+    threading.Thread(target=worker, daemon=True).start()
+    return True
+
+
 def start_decrypt(enc, out_dir, key):
     """后台线程执行解密，返回是否成功启动。"""
     with _DECRYPT_LOCK:
@@ -460,7 +513,7 @@ def _norm_path(p):
     规范化路径，用于缓存键比较。
 
     为什么要规范化：同一个目录可能以不同分隔符/大小写出现
-    （如 '/data/wechat/acc' 与 '/data\\wechat\\acc'）。
+    （如 'D:/wb-analyzer/decrypted/acc' 与 'D:\\wb-analyzer\\decrypted\\acc'）。
     若拿原始字符串当缓存键，自动刷新每 20 秒就会"认为路径变了"，
     从而关闭正在被统计线程使用的 sqlite 连接并重建 —— 统计永远算不完，
     面板一直空白。这里统一规范化，避免无意义的重建。
@@ -805,7 +858,9 @@ def ensure_conv_cache(path, limit=300):
             d = get_db(path)
             # ── 阶段 1：清单（快） ──
             data = d.conversations(limit=limit)
-            # 沿用上一轮已算好的条数，避免重建时「总消息」先掉再涨（看着像丢数据）
+            # 沿用上一轮已经算好的条数：否则每次重建都会把 count 归零，
+            # 大屏「总消息」会先掉一大截、再随后台计数慢慢涨回来，
+            # 看起来像丢了数据。这里按 talker 继承旧值，数字只增不乱跳。
             with _CONV_LOCK:
                 prev = _CONV_CACHE.get(path) or {}
                 old_counts = {c.get("talker"): c.get("count")
@@ -831,8 +886,9 @@ def ensure_conv_cache(path, limit=300):
             gentle = False
             for i in range(0, len(data), BATCH):
                 if not gentle and __import__("time").time() - started > budget:
-                    # 预算用尽不要直接 break，否则后面的会话永远是 0 条；
-                    # 转入慢速补齐，后台慢慢算完。
+                    # 预算用尽不要直接 break —— 那样后面的会话永远是 0 条，
+                    # 大屏上大半会话都显示「0 条」，看着像数据丢了。
+                    # 改成转入「慢速补齐」：每批多睡一会儿，后台慢慢算完。
                     gentle = True
                 chunk = data[i:i + BATCH]
                 for c in chunk:
@@ -867,7 +923,7 @@ def ensure_conv_cache(path, limit=300):
                     d.close_thread_conns()
                 except Exception:
                     pass
-                # 让出 GIL，保证 HTTP 线程能响应
+                # 让出 GIL，保证 HTTP 线程能响应（慢速补齐阶段睡更久）
                 __import__("time").sleep(0.15 if gentle else 0.02)
 
             with _CONV_LOCK:
@@ -1031,7 +1087,9 @@ def send_json(handler, obj, status=200):
 
 def send_file(handler, body, mime, fname):
     try:
-        # 中文文件名用 RFC 5987 filename*=UTF-8'' 编码，避免 HTTP 头 latin-1 报错
+        # 文件名含中文时，HTTP 头默认 latin-1 编码会抛异常、导致响应头残缺/
+        # 连接中断（表现为 IncompleteRead、curl "Header without colon"）。
+        # 用 RFC 5987 的 filename*=UTF-8''... 编码，同时给一个 ASCII 兜底名。
         import urllib.parse as _up
         ascii_fname = "".join(c if (32 <= ord(c) < 127) else "_" for c in fname) or "download"
         disp = f'attachment; filename="{ascii_fname}"; filename*=UTF-8\'\'{_up.quote(fname)}'
@@ -1151,6 +1209,15 @@ class Handler(BaseHTTPRequestHandler):
                 return send_json(self, {"ok": False, "reason": "未检测到本机微信数据，请确认微信已登录，或手动指定目录。"})
             out_dir = os.path.join(DECRYPTED_DIR, os.path.basename(enc.rstrip("/\\")))
             if not key:
+                # 没给密钥：不再直接甩"需要密钥"。
+                # 先按 4.x 正确路径跑 —— 复用 keyring，缺的从微信进程只读补提取，再逐库解密。
+                acct = _account_for_msg_dir(enc)
+                if acct and start_decrypt_account(acct, enc):
+                    return send_json(self, {"ok": True, "started": True, "auto_keys": True,
+                                            "dir": os.path.join(DECRYPTED_DIR, acct),
+                                            "msg_dir": enc,
+                                            "note": "未提供密钥：复用本机密钥环，"
+                                                    "缺的从微信进程内存只读提取后逐库解密"})
                 dbs = decmod.recursive_find_dbs(enc)
                 return send_json(self, {"ok": False, "needs_key": True, "msg_dir": enc,
                     "db_count": len(dbs),
@@ -1166,12 +1233,45 @@ class Handler(BaseHTTPRequestHandler):
             return send_json(self, st)
 
         if path == "/api/key-extract":
+            # 优先走跨平台的逐库提取（keycap → wcdb_ctx：解析 SQLCipher codec 上下文，
+            # 一个账号里每个 .db 的 key 都能拿到，并按 salt 记进本机密钥环）。
+            # 老的 extract_key_from_process 只做高熵暴力扫描、只在 Windows 可用、只出一个 key，
+            # 仅作为兜底保留 —— 它以前是一线入口，这也是"一键提取"在 mac/linux 上必失败的原因。
             enc = admod.auto_pick_encrypted()
             if not enc:
                 return send_json(self, {"ok": False, "reason": "未检测到本机微信加密数据"})
             dbs = decmod.recursive_find_dbs(enc)
-            key = decmod.extract_key_from_process(dbs[0]) if dbs else None
+            acct = _account_for_msg_dir(enc)
+            err = None
+            res = {}
+            if acct:
+                try:
+                    res = acctmod.ensure_keys(acct)
+                except Exception as e:
+                    err = "密钥提取模块异常：%s" % e
+                else:
+                    if not res.get("ok"):
+                        err = res.get("error") or "未能提取到密钥"
+            else:
+                err = "未识别账号目录，无法写入密钥环"
+            if res.get("ok"):
+                keys = keyring.keys_for("wechat", acct) or {}
+                # 只把"真属于某个库（有 salt）"的 key 填进输入框；level_key 是账号级兜底，不往里塞
+                db_keys = [v for s, v in sorted(keys.items()) if s]
+                first = (db_keys or [None])[0]
+                return send_json(self, {"ok": True, "key": first, "count": len(db_keys),
+                                        "msg_dir": enc, "account": acct,
+                                        "note": "从运行中的微信进程内存只读提取，"
+                                                "已按 salt 逐库记入本机密钥环（下次无需再提取）"})
+            # 兜底：老的高熵暴力扫描（仅 Windows，最多解一个库）
+            key = None
+            try:
+                key = decmod.extract_key_from_process(dbs[0]) if dbs else None
+            except Exception as e:
+                err = err or str(e)
             return send_json(self, {"ok": bool(key), "key": key, "msg_dir": enc,
+                                    "account": acct, "db_count": len(dbs),
+                                    "reason": err or "未能提取到密钥",
                                     "note": "从运行中的微信进程提取；失败则需手动提供密钥"})
 
         if path == "/api/load":
@@ -1525,14 +1625,17 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/search":
             # 走 FTS 全文索引（毫秒级），彻底避开 6404 张分表 LIKE 卡死服务。
-            st = ftsmod.status()
+            # 索引未就绪时返回 index_status，前端提示"索引构建中"，并回退到
+            # 带 talker 的限定搜索（快路径），绝不再触发全库 LIKE。
             q = g("q", "")
             talker = g("talker", "")
             if not q:
                 return send_json(self, {"results": []})
+            st = ftsmod.status()
             if st["status"] == "ready" and CURRENT_DIR:
                 res = ftsmod.search(q, limit=200, talker=talker or None, data_dir=CURRENT_DIR)
                 return send_json(self, {"results": res, "source": "index"})
+            # 索引未就绪：只在指定会话里搜（快），不碰全库
             if talker:
                 db = get_db()
                 res = db.search(q, limit=200, talker=talker)
@@ -1541,12 +1644,14 @@ class Handler(BaseHTTPRequestHandler):
                                     "index_status": st})
 
         if path == "/api/search/status":
+            # 索引构建进度，供前端展示
             st = ftsmod.status()
             if CURRENT_DIR and st["status"] != "building":
                 ftsmod.ensure_index(CURRENT_DIR, get_db(), background=True)
             return send_json(self, ftsmod.status())
 
         if path == "/api/search/rebuild":
+            # 手动重建索引（后台线程，不阻塞），force=True 忽略旧索引
             if not CURRENT_DIR:
                 return send_json(self, {"error": "无数据目录"}, 400)
             ftsmod.ensure_index(CURRENT_DIR, get_db(), background=True, force=True)
@@ -1559,10 +1664,13 @@ class Handler(BaseHTTPRequestHandler):
                 return send_json(self, {"error": "缺少关键词 q"}, 400)
             st = ftsmod.status()
             if st["status"] != "ready" or not CURRENT_DIR:
-                return send_json(self, {"error": "索引尚未就绪", "index_status": st}, 503)
+                return send_json(self, {"error": "索引尚未就绪",
+                                        "index_status": st}, 503)
             keywords = [k.strip() for k in q.replace("，", ",").split(",") if k.strip()]
             per = min(int(g("per") or 100), 500)
-            groups, seen_ids, total = [], set(), 0
+            groups = []
+            seen_ids = set()
+            total = 0
             for kw in keywords:
                 rows = ftsmod.search(kw, limit=per, data_dir=CURRENT_DIR)
                 rows = [r for r in rows if (r.get("content"), r.get("talker"), r.get("time")) not in seen_ids]
@@ -1570,14 +1678,19 @@ class Handler(BaseHTTPRequestHandler):
                     seen_ids.add((r.get("content"), r.get("talker"), r.get("time")))
                 groups.append((kw, rows))
                 total += len(rows)
+
             import datetime
             def _fmt_time(ts):
                 try:
                     ts = int(ts)
-                    if ts > 1e11: ts //= 1000
-                    if ts <= 0: return "时间未知"
+                    if ts > 1e11:
+                        ts //= 1000
+                    if ts <= 0:
+                        return "时间未知"
                     return datetime.datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M")
-                except Exception: return "时间未知"
+                except Exception:
+                    return "时间未知"
+
             blocks = [
                 {"t": "p", "text": f"生成时间：{datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}"},
                 {"t": "p", "text": f"搜索关键词：{q}"},
@@ -1587,15 +1700,19 @@ class Handler(BaseHTTPRequestHandler):
             for kw, rows in groups:
                 blocks.append({"t": "h1", "text": f"关键词：{kw}（{len(rows)} 条）"})
                 if not rows:
-                    blocks.append({"t": "p", "text": "（无匹配记录）"}); blocks.append({"t": "blank"}); continue
+                    blocks.append({"t": "p", "text": "（无匹配记录）"})
+                    blocks.append({"t": "blank"})
+                    continue
                 for r in rows:
                     who = r.get("name") or r.get("talker") or "未知会话"
                     direction = "我" if r.get("isSend") else "对方"
-                    blocks.append({"t": "item", "label": f"[{_fmt_time(r.get('time'))}] {who} · {direction}：",
-                                   "text": str(r.get("content") or "").strip()})
+                    label = f"[{_fmt_time(r.get('time'))}] {who} · {direction}："
+                    content = str(r.get("content") or "").strip()
+                    blocks.append({"t": "item", "label": label, "text": content})
                 blocks.append({"t": "blank"})
             blocks.append({"t": "hr"})
             blocks.append({"t": "p", "text": "微信数据分析大屏 · 一键整理 · 署名 云帆-H1088880"})
+
             try:
                 body = docxmod.build_document(f"重要记录整理：{q}", blocks)
             except Exception as e:
@@ -2032,7 +2149,7 @@ def main():
         threading.Thread(target=get_stats, args=(loaded,), daemon=True).start()
         print("[统计] 正在后台预热热力图/词频（约 1-2 分钟）…")
         # 全文检索索引：一次建好（约 1 分钟），之后搜索/一键整理毫秒级。
-        # 数据没变则跳过；变了才重建。后台线程，完全不阻塞服务。
+        # 数据没变则跳过；变了才重建。构建在后台线程，完全不阻塞服务。
         ftsmod.ensure_index(loaded, get_db(loaded), background=True)
         print("[索引] 正在后台构建全文检索索引（供一键整理用，约 1 分钟）…")
     print("所有分析均为只读，不写库、不发消息、不连微信。")

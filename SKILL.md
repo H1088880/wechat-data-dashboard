@@ -17,6 +17,8 @@ author: 云帆-H1088880
 
 用户说"打开/启动微信大屏"时，直接执行：
 
+0. **先自检**：`python scripts/preflight.py`。它会核对必需文件、扫出"被引用但没打包"的模块、逐模块试 import。
+   本包曾漏打包 `keycap.py` / `wcdb_ctx.py`（密钥提取的两个核心模块），导致对方 clone 后"一键提取密钥"永远失败且原因被显示成"微信版本/权限限制"。**自检不过就别往下走。**
 1. 确认 Python 3.8+：`python --version`（或 `python3`）。
 2. 进入 `assets/app/`，运行一键启动器：
    - Windows：`启动大屏-Windows.bat`（或 `python launch.py`）
@@ -24,6 +26,7 @@ author: 云帆-H1088880
    - 有数据目录时加 `--data <已解密目录>`；只想起服务加 `--no-screen`。
 3. 启动器会自动：装依赖 → 启动服务(7890) → 等服务就绪 → 调 `/api/screen` 弹全屏大屏。
 4. 若无解密数据，先打开 `http://127.0.0.1:7890/index.html` 用解密入口页完成密钥导入与解密，`launch.py` 会自动探测 `decrypted/<账号>/`。
+   入口页的"⚡ 一键探测 + 解密 + 加载"**不填密钥也能跑**：先复用本机密钥环，缺的从微信进程内存只读补提取，再逐库解密。
 
 **前提（必须如实告知用户）**：软件要运行，目标机器必须有 ①Python+浏览器 ②微信数据 ③解密密钥。②③是用户隐私，本包不含、也无法替用户准备；云端 AI（无本机文件系统）无法运行本软件，只有能操作本机文件的 Agent 才能启动。
 
@@ -65,8 +68,9 @@ author: 云帆-H1088880
 
 ### 2. 密钥提取
 - 优先从本机密钥环/配置文件读取。
-- 无密钥时从微信进程内存只读扫描候选（有预算上限，避免长时间卡死）。
-- 密钥只保存在本机运行区，用后即作为进程内变量，不写入 Skill。
+- 无密钥时走 `keycap.extract()`：Windows 用 ReadProcessMemory + WCDB codec 上下文，macOS 用 lldb dump，Linux 用 `/proc/<pid>/mem`；三者共用 `wcdb_ctx.py` 的解析与 HMAC 校验，**只读**目标进程内存。
+- 必须**逐库**取密钥：4.x 里每个 `.db` 有自己的 salt + 32 字节 key，单密钥最多解开一个库。走 `accounts.decrypt_account()` → `extract_keys_v4()` 写入 keyring → `decrypt_account_v4()` 按 salt 取 key 逐库解密。
+- 密钥只保存在本机运行区（`keyring.json`），不写入 Skill；写入一次后重登/重装仍可复用。
 
 ### 3. 解密
 用解密模块把源库产出为明文只读副本到 `decrypted/<账号>/`。
@@ -95,17 +99,22 @@ author: 云帆-H1088880
 - `launch.py` + `启动大屏-Windows.bat` + `启动大屏-Mac-Linux.command` — 跨平台一键启动器。
 - 服务与核心模块：`server.py` `boot.py` `db.py` `decrypt.py` `platforms.py` `incremental.py`
   `refresh.py` `env.py` `autodetect.py` `accounts.py` `keyring.py` `cloudstore.py`
-  `annual.py` `export.py` `wxkey_extract.py` `launch_big.py`。
+  `annual.py` `export.py` `wxkey_extract.py` `launch_big.py` `sample.py`（示例库生成，`/api/sample`）。
+- **密钥提取三件套（缺一不可，曾漏打包）**：`keycap.py`（按平台分发：win32/macos/linux）、
+  `wcdb_ctx.py`（SQLCipher codec 上下文解析 + 页 1 HMAC 实证校验，平台无关）、
+  `wxkey_extract.py`（Windows ReadProcessMemory / VirtualQueryEx 后端）。
 - 检索与整理：`search_fts.py`（FTS5 全文索引，毫秒级全库搜索）、`digest_docx.py`（零依赖 Word 生成器）。
 - `templates/index.html`（解密入口）、`templates/bigscreen.html`（全屏大屏，含署名与"一键整理成 Word"按钮）。
 
 ### references/ — 按需加载的知识
 - `architecture.md` — 模块职责、路由、各平台数据目录、启动/守护机制。
-- `pitfalls.md` — 10 条已验证修复（消息排序/create_time 无索引、ClearType 中文发虚、
-  全屏窗口 z 序、watchdog 双实例、刷新过快反更慢、os.replace 占用、二维码乱码等）。排错优先读。
+- `pitfalls.md` — 12 条已验证修复（消息排序/create_time 无索引、ClearType 中文发虚、
+  全屏窗口 z 序、watchdog 双实例、刷新过快反更慢、os.replace 占用、二维码乱码、
+  漏打包导致"一键提取密钥"全平台失败等）。排错优先读。
 - `platforms.md` — 飞书/钉钉/企微授权差异与二维码实现。
 
 ### scripts/ — 通用工具
+- `preflight.py` — **包完整性自检**（必需文件 / 悬空 import / 逐模块 import / 依赖状态）。发布前必跑。
 - `env_probe.py` — 平台无关的环境与数据目录探测。
 - `privacy_scan.py` — 隐私回归扫描（账号/密钥/token/绝对路径/聊天标识）。
 

@@ -288,14 +288,20 @@ async function loadSample(){
   $('#decryptResult').innerHTML='<span class="ok">已生成示例数据并加载，去「浏览/搜索/年度总结」体验吧。</span>';
 }
 async function tryExtractKey(){
-  $('#autoResult').innerHTML='<span class="muted">正在读取微信进程内存尝试提取密钥（最多 30 秒）…</span>';
-  const d=await api('/api/key-extract');
+  $('#autoResult').innerHTML='<span class="muted">正在读取微信进程内存尝试提取密钥（一般几秒，最多 30 秒）…</span>';
+  let d={};
+  try{ d=await api('/api/key-extract'); }catch(e){ d={ok:false,reason:'请求失败：'+(e&&e.message||e)}; }
   if(d.ok && d.key){
     $('#autoKey').value=d.key;
-    $('#autoResult').innerHTML='<span class="ok">✓ 已提取到密钥，已填入输入框，点左边按钮即可解密。</span>';
+    const n=d.count?`（已按 salt 逐库记入密钥环：${d.count} 个库）`:'';
+    $('#autoResult').innerHTML=`<span class="ok">✓ 已提取到密钥${n}，已填入输入框，点左边按钮即可解密。</span>`
+      +'<div class="muted" style="margin-top:6px">密钥已记住：微信退出登录或重装，同一批库也不用再提取/再解密。</div>';
   }else{
-    $('#autoResult').innerHTML='<span class="err">未能自动提取（微信版本/权限限制）。请手动填入密钥。</span>'
-      +'<div class="muted" style="margin-top:6px">可用你已有的解密工具读一次当前密钥，粘到上面输入框。</div>';
+    // 把真实原因显示出来 —— 以前一律写成"微信版本/权限限制"，
+    // 结果缺模块、没登录、权限不足全都长得一样，排查只能靠猜。
+    const why=d.reason||'未说明原因';
+    $('#autoResult').innerHTML=`<span class="err">未能自动提取：${why}</span>`
+      +'<div class="muted" style="margin-top:6px">排查顺序：① 微信是否正在运行且已登录 → ② 是否同用户运行（跨用户需管理员/root）→ ③ 仍不行就用你已有的解密工具读一次当前密钥，粘到上面输入框。</div>';
   }
 }
 async function pollDecrypt(box){
@@ -313,14 +319,21 @@ async function pollDecrypt(box){
 }
 async function autoDecrypt(){
   const key=$('#autoKey').value.trim();
-  $('#autoResult').textContent='探测中…';
+  $('#autoResult').innerHTML='<span class="muted">探测中…'+(key?'':'（未填密钥：先复用本机密钥环，缺的从微信进程内存补提取）')+'</span>';
   const url='/api/auto'+(key?'?key='+encodeURIComponent(key):'');
-  const d=await api(url);
+  let d={};
+  try{ d=await api(url); }catch(e){ d={reason:'请求失败：'+(e&&e.message||e)}; }
   if(d.started){
     const p=await pollDecrypt('#autoResult');
     refreshStatus();
     if(p.error){
-      $('#autoResult').innerHTML=`<span class="err">解密失败：${p.error}</span>`;
+      if(p.needs_key){
+        $('#autoResult').innerHTML=`<span class="err">解密没做成：${p.error}</span>`
+          +'<div class="muted" style="margin-top:6px">自动补密钥失败，请点「🔑 从微信进程提取」看具体原因，'
+          +'或用你已有的解密工具读一次当前密钥填到上面输入框。</div>';
+      }else{
+        $('#autoResult').innerHTML=`<span class="err">解密失败：${p.error}</span>`;
+      }
     }else{
       $('#autoResult').innerHTML=`<span class="ok">✓ 解密完成：${p.ok}/${p.total} 个库，已加载</span>`;
       refreshStatus(); loadConversations();

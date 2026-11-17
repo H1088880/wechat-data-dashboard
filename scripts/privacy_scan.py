@@ -4,6 +4,10 @@
 用法: python privacy_scan.py <目录> [更多目录...]
 退出码 0=干净，1=发现疑似隐私（并逐条打印位置）。
 只读扫描，不修改文件。
+
+豁免：在命中行前 3 行内（含当行）写 `privacy-ok: 原因` 注释即可跳过。
+只用于"确实不是隐私的公开常量"（如 WCDB 的 codec 结构前缀）；
+真实的密钥/账号**不要**加豁免，改了它别处也会用到。
 """
 import os
 import re
@@ -31,13 +35,19 @@ def scan_file(path):
     hits = []
     try:
         with open(path, encoding="utf-8", errors="ignore") as f:
-            for ln, line in enumerate(f, 1):
-                for name, pat in PATTERNS.items():
-                    if pat.search(line):
-                        snippet = line.strip()[:100]
-                        hits.append((name, ln, snippet))
+            lines = f.readlines()
     except Exception:
-        pass
+        return hits
+    for ln, line in enumerate(lines, 1):
+        # 豁免窗口：命中行前 3 行到当行内出现 privacy-ok 就不报告
+        window = "".join(lines[max(0, ln - 4):ln])
+        waived = "privacy-ok" in window
+        for name, pat in PATTERNS.items():
+            if pat.search(line):
+                if waived:
+                    continue
+                snippet = line.strip()[:100]
+                hits.append((name, ln, snippet))
     return hits
 
 
