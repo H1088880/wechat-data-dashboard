@@ -1,0 +1,33 @@
+# 隐私防线：任何真实数据、密钥、账号都不要进 Git
+decrypted/
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.key
+keyring.json
+keyring*.db
+*.keyring
+token*
+.env
+*.log
+
+# Python 运行产物
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# 本机导出 / 临时文件
+exports/
+output/
+*.xlsx
+*.csv
+*.zip
+
+# 编辑器 / 系统
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

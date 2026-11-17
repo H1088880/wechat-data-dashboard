@@ -1,0 +1,1866 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>CodeScreen · 微信数据分析 · 大屏</title>
+<!-- 内联 favicon：避免浏览器去请求 /favicon.ico 拿到 404（控制台报错） -->
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='13' fill='%232dd4bf'/%3E%3C/svg%3E">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  :root{
+    --bg:#070a11; --panel:#0d1420; --panel2:#111a28; --line:rgba(255,255,255,.08);
+    --fg:#e9eef8; --dim:#8fa0ba; --dim2:#5d6c85;
+    --accent:#2dd4bf; --accent2:#38bdf8; --warn:#fbbf24; --bad:#f87171;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  body{
+    background:radial-gradient(1200px 600px at 15% -10%,rgba(45,212,191,.10),transparent 60%),
+               radial-gradient(1000px 500px at 90% 0%,rgba(56,189,248,.09),transparent 55%),
+               var(--bg);
+    color:var(--fg);font-family:-apple-system,"Segoe UI",system-ui,"Microsoft YaHei",sans-serif;
+    display:flex;flex-direction:column;overflow:hidden;
+  }
+  /* 顶栏：固定两行网格。
+     之前 .pills 是自动换行的 flex：内容一变（账号名变长、消息量位数变了）
+     就会从两行缩成一行，下面三列面板整体上移一格 —— 看着像页面自己动了一下。
+     改成显式两行（第 1 行主要指标 / 第 2 行账号与刷新）后高度恒定，不再跳。 */
+  header{
+    display:grid;
+    grid-template-columns:auto minmax(0,1fr) auto;
+    grid-template-rows:auto auto;
+    align-items:center;column-gap:14px;row-gap:9px;
+    padding:12px 22px;flex:none;position:relative;
+    border-bottom:1px solid var(--line);background:rgba(9,14,22,.75);backdrop-filter:blur(8px);
+  }
+  .brand{grid-area:1/1/3/2;display:flex;flex-direction:column;align-items:flex-start;justify-content:center;gap:11px;font-weight:800;font-size:19px;letter-spacing:.5px}
+  .brand-line{display:flex;align-items:center;gap:10px;white-space:nowrap}
+  .brand .dot{width:9px;height:9px;border-radius:50%;background:var(--accent);box-shadow:0 0 12px var(--accent);flex:none}
+  .brand .signature{
+    align-self:center;margin-left:0;padding:3px 11px;border-radius:20px;
+    font-family:var(--mono);font-size:11.5px;font-weight:700;letter-spacing:.8px;
+    color:#5eead4;background:rgba(45,212,191,.10);border:1px solid rgba(45,212,191,.34);
+    white-space:nowrap;line-height:1.2;
+  }
+  .pills{display:flex;gap:8px;min-width:0;flex-wrap:nowrap;overflow:hidden}
+  .pills.r1{grid-area:1/2/2/3}
+  .pills.r2{grid-area:2/2/3/3}
+  .pills > .pill{flex:none}
+  .headright{
+    grid-area:1/3/3/4;display:flex;align-items:center;gap:10px;justify-self:end;
+  }
+  .pill{
+    display:flex;align-items:center;gap:7px;padding:6px 12px;border-radius:11px;
+    background:var(--panel);border:1px solid var(--line);
+  }
+  .pill .k{font-size:13px;color:var(--dim);letter-spacing:.3px}
+  .pill .v{font-family:var(--mono);font-size:18px;font-weight:700;color:var(--fg)}
+  .pill .v.a{color:var(--accent)}
+  .pill .v.b{color:var(--accent2)}
+  .pill.acct{gap:9px;align-items:center}
+  .pill.acct select{
+    background:#0a121e;color:var(--fg);border:1px solid var(--line);border-radius:9px;
+    padding:7px 12px;font-size:14px;font-family:var(--mono);outline:none;cursor:pointer;
+    max-width:230px;
+  }
+  .pill.acct select:focus{border-color:rgba(45,212,191,.55)}
+  .pill.acct select:disabled{opacity:.55;cursor:progress}
+  .pill.acct option{background:#0d1420;color:var(--fg)}
+
+  /* ── 自定义下拉框（原生 select 在深色主题下展开是系统白底样式，很难看）── */
+  .dd{position:relative;display:inline-block}
+  .dd-btn{
+    display:flex;align-items:center;gap:8px;min-width:132px;
+    background:#0a121e;color:var(--fg);border:1px solid var(--line);border-radius:9px;
+    padding:7px 11px;font-size:14px;font-family:var(--mono);outline:none;cursor:pointer;
+    transition:.15s;
+  }
+  .dd-btn:hover{border-color:rgba(45,212,191,.55)}
+  .dd-btn .cur{flex:1;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .dd-btn .caret{
+    font-size:9px;color:var(--dim2);transition:transform .18s;flex:none;
+    border-left:4px solid transparent;border-right:4px solid transparent;
+    border-top:5px solid currentColor;width:0;height:0;
+  }
+  .dd.open .dd-btn .caret{transform:rotate(180deg)}
+  /* 下拉菜单挂到 <body> 下，用 position:fixed 定位。
+     原因：顶栏 .pills 上有 overflow:hidden（防止药丸溢出顶栏），
+     菜单原本是它的绝对定位子元素 → 会被整块裁掉，展开后一个选项都看不见。
+     fixed 不受祖先 overflow 裁剪，位置由 JS 按按钮实测坐标算。 */
+  .dd-menu{
+    position:fixed;z-index:200;min-width:150px;
+    background:#0d1420;border:1px solid var(--line);border-radius:11px;
+    box-shadow:0 14px 40px rgba(0,0,0,.6);padding:5px;display:none;
+    max-height:320px;overflow:auto;
+  }
+  .dd-menu.on{display:block}
+  .dd-item{
+    display:flex;align-items:center;gap:8px;padding:7px 11px;border-radius:8px;
+    font-size:13px;font-family:var(--mono);color:var(--fg);cursor:pointer;white-space:nowrap;
+  }
+  .dd-item:hover{background:rgba(45,212,191,.12)}
+  .dd-item.sel{background:rgba(45,212,191,.18);color:var(--accent)}
+  .dd-item .dot{width:7px;height:7px;border-radius:50%;background:var(--dim2);flex:none}
+  .dd-item.ok .dot{background:#4ade80}
+  .dd-item.no .dot{background:#f59e0b}
+  .dd-item .cnt{margin-left:auto;color:var(--dim2);font-size:11.5px;padding-left:12px}
+
+  .pill button#btnRefresh{
+    background:rgba(45,212,191,.10);color:var(--accent);border:1px solid rgba(45,212,191,.35);
+    border-radius:9px;padding:6px 14px;font-size:13.5px;font-family:var(--mono);
+    cursor:pointer;outline:none;transition:.15s;
+  }
+  .pill button#btnRefresh:hover{background:rgba(45,212,191,.20);border-color:var(--accent)}
+  .pill button#btnRefresh:disabled{opacity:.5;cursor:progress}
+  .pill button.mini{
+    background:rgba(255,255,255,.05);color:var(--dim);border:1px solid var(--line);
+    border-radius:9px;padding:6px 12px;font-size:13px;font-family:var(--mono);
+    cursor:pointer;outline:none;transition:.15s;
+  }
+  .pill button.mini:hover{color:var(--accent);border-color:rgba(45,212,191,.45);background:rgba(45,212,191,.12)}
+  .pill button.mini:disabled{opacity:.5;cursor:progress}
+  .spacer{flex:1}
+  .searchbox{display:flex;align-items:center;gap:8px}
+  .searchbox input{
+    width:215px;padding:9px 13px;border-radius:10px;border:1px solid var(--line);
+    background:#0a121e;color:var(--fg);font-size:15px;outline:none;
+  }
+  .searchbox input:focus{border-color:rgba(45,212,191,.55);box-shadow:0 0 0 3px rgba(45,212,191,.10)}
+  .searchbox button{
+    padding:9px 17px;border:0;border-radius:10px;cursor:pointer;font-weight:700;font-size:15px;
+    background:linear-gradient(135deg,#2dd4bf,#38bdf8);color:#04121a;
+  }
+  .backlink{
+    text-decoration:none;color:var(--dim);font-size:13.5px;font-family:var(--mono);
+    border:1px solid var(--line);border-radius:9px;padding:8px 13px;
+  }
+  .backlink:hover{color:var(--accent);border-color:rgba(45,212,191,.4)}
+
+  /* 三列布局。
+     轨道必须写成 minmax(0, …)：grid item 的 min-width 默认是 auto，
+     轨道会被子内容（表情格 minmax(74px,1fr)、流程步骤文字）撑到比容器还宽，
+     结果右列整体溢出视口被裁掉 —— 表现就是「大屏在网页里显示不全」。
+     配套：.col / .card / .body 都要 min-width:0，否则收缩传不下去。 */
+  main{flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,1.15fr) minmax(0,.85fr) minmax(0,1fr);gap:14px;padding:14px 18px 18px}
+  .col{display:flex;flex-direction:column;gap:14px;min-height:0;min-width:0}
+  .card{
+    background:linear-gradient(180deg,rgba(255,255,255,.022),rgba(255,255,255,.006)),var(--panel);
+    border:1px solid var(--line);border-radius:14px;display:flex;flex-direction:column;min-height:0;min-width:0;overflow:hidden;
+  }
+  .card h2{
+    margin:0;padding:11px 15px;font-size:14px;font-weight:700;letter-spacing:.3px;
+    color:#f2f6ff;text-transform:none;border-bottom:1px solid var(--line);
+    display:flex;align-items:center;gap:8px;
+    -webkit-font-smoothing:antialiased;text-shadow:none;transform:translateZ(0);
+  }
+  .card h2 .tag{
+    margin-left:auto;font-family:var(--mono);font-size:11.5px;font-weight:700;color:#5eead4;
+    background:rgba(45,212,191,.14);border:1px solid rgba(45,212,191,.40);border-radius:20px;padding:2px 10px;
+  }
+  .body{padding:12px 15px;overflow:auto;flex:1;min-height:0;min-width:0}
+  .body::-webkit-scrollbar{width:6px}
+  .body::-webkit-scrollbar-thumb{background:rgba(255,255,255,.10);border-radius:6px}
+
+  /* 最近消息流：底部渐隐。
+     消息条数是动态的（少则留白、多则被卡片裁掉一半），
+     用 mask 做固定于视口的底部渐隐，被裁切时是「还有更多」的暗示，
+     而不是半截消息硬生生切一半。 */
+  #feed{
+    -webkit-mask-image:linear-gradient(180deg,#000 0,#000 calc(100% - 24px),transparent 100%);
+    mask-image:linear-gradient(180deg,#000 0,#000 calc(100% - 24px),transparent 100%);
+  }
+
+  /* 表情统计：自适应方格阵
+     原来是一行一个（40 个表情要滚 956px 才看得完），
+     改成网格后一屏铺满，每个格子的底色直接表示热度。 */
+  .emogrid{
+    display:grid;
+    /* min(74px,100%)：容器比 74px 还窄时自动退到 100%，
+       否则 auto-fill 的最小列宽会把格子撑出卡片。 */
+    grid-template-columns:repeat(auto-fill,minmax(min(74px,100%),1fr));
+    grid-auto-rows:1fr;
+    gap:7px;height:100%;min-width:0;
+  }
+  .emogrid .e{
+    position:relative;overflow:hidden;
+    display:flex;align-items:center;gap:5px;
+    padding:0 7px;border-radius:9px;
+    background:rgba(255,255,255,.035);
+    border:1px solid rgba(255,255,255,.055);
+    transition:border-color .15s;
+  }
+  .emogrid .e .fill{
+    position:absolute;left:0;top:0;bottom:0;z-index:0;
+    background:linear-gradient(90deg,rgba(199,210,254,.30),rgba(125,211,252,.09));
+  }
+  .emogrid .e .ch{position:relative;z-index:1;font-size:17px;line-height:1;flex:none}
+  .emogrid .e .n{
+    position:relative;z-index:1;margin-left:auto;
+    font-family:var(--mono);font-size:10.5px;color:#c7d2fe;
+  }
+  .emogrid .e:hover{border-color:rgba(125,211,252,.42)}
+  .emogrid .e:hover .ch{filter:brightness(1.25)}
+
+  /* TOP 会话 */
+  .conv{display:flex;align-items:center;gap:10px;margin-bottom:9px}
+  .conv .nm{
+    width:30%;min-width:0;font-size:13.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#dbe6f7;
+  }
+  .conv .bar{flex:1;height:9px;border-radius:6px;background:rgba(255,255,255,.055);overflow:hidden}
+  .conv .bar i{display:block;height:100%;border-radius:6px;background:linear-gradient(90deg,#2dd4bf,#38bdf8)}
+  .conv .ct{width:56px;text-align:right;font-family:var(--mono);font-size:12.5px;color:var(--dim)}
+  .conv .ag{
+    width:52px;text-align:right;font-family:var(--mono);font-size:10.5px;color:var(--dim2);
+    white-space:nowrap;overflow:hidden;
+  }
+
+  /* 数据链路：纵向时间线 */
+  .flow{
+    display:flex;flex-direction:column;
+    /* 撑满卡片的剩余空间：5 步均分，不再在上部挤一堆、下面空一大段。
+       竖线用的是 top:-50% + height:100%（上一圆点中心 → 本圆点中心），
+       步骤等高时自动衔接正确，不用手算间距。
+       overflow:auto 是必须的：卡片高度不够时，5 个步骤的 min-height 之和
+       超出容器，多出来的部分会溢出并压在下面的「指标格」上（文字叠字）。
+       让它自己滚动，就永远压不到别人。 */
+    flex:1;
+    min-height:0;
+    overflow:auto;
+    gap:0;
+    margin:0 0 2px;
+  }
+  .flow .step{
+    display:flex;align-items:center;gap:10px;
+    position:relative;padding:0;
+    flex:1;
+    /* 一行标题 + 一行说明 ≈ 15 + 13 = 28px，min-height 必须够放这两行，
+       否则 flex 压缩时文字会溢出到相邻步骤上。 */
+    min-height:32px;
+  }
+  /* 步骤之间的连接线：画在圆点正下方 */
+  .flow .step + .step::before{
+    content:'';position:absolute;left:10px;top:-50%;width:2px;height:100%;
+    background:linear-gradient(180deg,rgba(45,212,191,.18),rgba(45,212,191,.48));
+    border-radius:2px;
+  }
+  .flow .step .dot{
+    width:20px;height:20px;border-radius:50%;flex:none;position:relative;z-index:1;
+    border:2px solid var(--panel);
+    display:grid;place-items:center;
+  }
+  .flow .step .dot::after{
+    content:'';width:7px;height:7px;border-radius:50%;background:transparent;
+  }
+  .flow .step .dot.ok{background:var(--accent);box-shadow:0 0 9px rgba(45,212,191,.5)}
+  .flow .step .dot.ok::after{background:#06231f}
+  .flow .step .dot.live{
+    background:var(--accent2);box-shadow:0 0 0 0 rgba(56,189,248,.55);
+    animation:pulse 1.9s ease-out infinite;
+  }
+  .flow .step .dot.live::after{background:#062a3d}
+  .flow .step .dot.idle{background:rgba(255,255,255,.10);border-color:rgba(255,255,255,.16)}
+  @keyframes pulse{
+    0%{box-shadow:0 0 0 0 rgba(56,189,248,.5)}
+    70%{box-shadow:0 0 0 7px rgba(56,189,248,0)}
+    100%{box-shadow:0 0 0 0 rgba(56,189,248,0)}
+  }
+  /* 文字块：标题 + 说明 */
+  .flow .step .tx{display:flex;flex-direction:column;gap:1px;min-width:0;flex:1;overflow:hidden}
+  .flow .step b{
+    font-size:12.5px;color:#dbe6f7;font-weight:700;letter-spacing:.4px;white-space:nowrap;
+    line-height:15px;
+  }
+  .flow .step i{
+    font-style:normal;font-size:11.5px;color:#b9c8de;white-space:nowrap;
+    overflow:hidden;text-overflow:ellipsis;max-width:100%;line-height:14px;
+  }
+  /* 每步右侧的实时数值：把竖向空白填成有用信息 */
+  .flow .step .v{
+    font-family:var(--mono);font-size:11px;color:var(--dim);
+    text-align:right;white-space:nowrap;flex:none;max-width:46%;
+    overflow:hidden;text-overflow:ellipsis;
+  }
+  .flow .step.live b{color:var(--accent2)}
+  .flow .step.live i{color:var(--dim)}
+  .flow .step.live .v{color:var(--accent2)}
+  /* 活动节点之前的连线也用蓝色，保持一致 */
+  .flow .step.live::before{
+    background:linear-gradient(180deg,rgba(45,212,191,.48),rgba(56,189,248,.48));
+  }
+
+  /* 同步详情条 */
+  .syn{
+    display:flex;align-items:stretch;gap:1px;border-radius:11px;overflow:hidden;
+    background:var(--line);border:1px solid var(--line);
+    flex:none;   /* 父级是 column flex，不加会被压扁导致数值被裁掉 */
+  }
+  .syn > div{
+    flex:1;min-width:0;background:rgba(255,255,255,.022);
+    padding:8px 10px;display:flex;flex-direction:column;gap:3px;
+  }
+  .syn span{font-size:12px;color:#b9c8de;font-weight:600;letter-spacing:.2px;white-space:nowrap}
+  .syn b{
+    font-size:13px;font-family:var(--mono);font-weight:700;color:#dbe6f7;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  }
+  .syn b.good{color:var(--accent)}
+  .syn b.live{color:var(--accent2)}
+
+  /* 卡片副标题
+     「只读取你自己的聊天记录做统计」这句话原来夹在流程步骤和指标格中间，
+     读起来像半句话硬塞在两个板块之间，很难看。
+     现在把它提到卡片标题下方当副标题，一行说完，下面只剩「流程 + 指标」。 */
+  .card .cap{
+    display:flex;align-items:center;gap:8px;flex:none;
+    padding:7px 15px;border-bottom:1px solid var(--line);
+    background:rgba(45,212,191,.045);
+    font-size:11.5px;color:var(--dim);white-space:nowrap;overflow:hidden;
+  }
+  .card .cap .lock{
+    width:20px;height:20px;flex:none;border-radius:6px;display:grid;place-items:center;
+    font-size:11px;background:rgba(45,212,191,.13);border:1px solid rgba(45,212,191,.28);
+  }
+  .card .cap b{color:var(--accent);font-weight:700}
+  .card .cap .sub{
+    color:#b9c8de;font-family:var(--mono);font-size:11.5px;margin-left:auto;flex:none;
+  }
+
+  /* 参数卡片 */
+  .kv{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px;flex:none}
+  .kv > div{
+    background:linear-gradient(160deg,rgba(255,255,255,.055),rgba(255,255,255,.015));
+    border:1px solid var(--line);border-radius:11px;
+    padding:9px 11px;display:flex;flex-direction:column;gap:4px;
+    transition:.18s;
+  }
+  .kv > div:hover{border-color:rgba(45,212,191,.28);transform:translateY(-1px)}
+  .kv span{
+    font-size:12px;color:#b9c8de;font-weight:600;letter-spacing:.2px;
+    display:flex;align-items:center;gap:4px;
+  }
+  .kv span::before{
+    content:'';width:4px;height:4px;border-radius:50%;background:var(--accent);
+    opacity:.75;flex:none;
+  }
+  .kv b{font-size:12.5px;color:#dbe6f7;font-family:var(--mono);font-weight:700;letter-spacing:.2px}
+
+  /* 热力图：24 小时剖面曲线 + 7 条时段带 */
+  .heat{display:flex;flex-direction:column;gap:12px;height:100%}
+  .heat .empty{text-align:center;padding:26px 0;color:var(--dim2);font-size:12px}
+
+  /* 剖面曲线 */
+  /* margin-left 让曲线与下方时段带左右严格对齐（补上星期标签列的宽度） */
+  .hprof{position:relative;flex:none;margin-left:23px;padding-bottom:15px}
+  .hprof svg{width:100%;height:104px;display:block;overflow:visible}
+  .hprof .ln{fill:none;stroke:#38bdf8;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;
+             vector-effect:non-scaling-stroke}
+  /* 峰值标记 */
+  .hp-peak{position:absolute;transform:translate(-50%,-50%);pointer-events:none;z-index:2}
+  .hp-peak i{
+    display:block;width:10px;height:10px;border-radius:50%;background:#7dd3fc;
+    box-shadow:0 0 0 3px rgba(56,189,248,.20),0 0 14px rgba(56,189,248,.6);
+  }
+  .hp-peak b{
+    position:absolute;left:50%;top:-19px;transform:translateX(-50%);
+    font-size:12px;color:#bae6fd;font-family:var(--mono);font-weight:700;white-space:nowrap;
+    text-shadow:0 1px 4px rgba(4,7,12,.9);
+  }
+  /* 小时刻度 */
+  .hp-x{position:absolute;left:0;right:0;bottom:0;height:13px}
+  .hp-x span{
+    position:absolute;transform:translateX(-50%);
+    font-size:10.5px;color:var(--dim);font-family:var(--mono);
+  }
+  .hp-x span:first-child{transform:none}
+  .hp-x span:last-child{transform:translateX(-100%)}
+  /* 曲线区的标题：说明这条线是什么，否则用户只看到一条莫名其妙的弧 */
+  .hprof-cap{
+    position:absolute;left:0;top:-2px;
+    font-size:11.5px;color:var(--dim);letter-spacing:.3px;pointer-events:none;
+  }
+
+  /* 7 条时段带（每行一天，24 格横向铺满） */
+  .hmat{display:flex;flex-direction:column;gap:4px;flex:1;min-height:0}
+  .hrow{display:flex;align-items:center;gap:10px;flex:1;min-height:0}
+  .hrow .d{width:13px;flex:none;text-align:center;font-size:10px;color:var(--dim2);font-weight:600}
+  .hrow.we .d{color:var(--accent2)}
+  .hrow .seg{
+    position:relative;flex:1;min-width:0;height:100%;min-height:15px;
+    border-radius:8px;overflow:hidden;
+    box-shadow:inset 0 0 0 1px rgba(255,255,255,.05);
+  }
+  .hrow .seg i{position:absolute;top:0;bottom:0;cursor:default}
+  .hrow .seg i:hover{box-shadow:inset 0 0 0 2px rgba(255,255,255,.85)}
+
+  /* 热力图图例
+     之前是「低 ●●●●● 高」+「曲线高峰 / 单格峰值」，
+     10.5px 的灰字在深色底上几乎看不见，术语也不说人话。
+     现在改成：说清楚这条色带是什么（消息密度 少→多），
+     再用两行大字给出结论（最活跃的时段、最热的一格）。 */
+  .heat-legend{
+    display:flex;align-items:center;gap:9px 18px;flex:none;flex-wrap:wrap;
+    font-size:12px;color:var(--dim);
+  }
+  .heat-legend .lg{display:flex;align-items:center;gap:7px;min-width:0}
+  .heat-legend .lt{font-size:11.5px;color:var(--dim);white-space:nowrap}
+  .heat-legend .lt.mute{color:var(--dim)}
+  .heat-legend .ramp{
+    width:124px;height:11px;border-radius:6px;flex:none;
+    border:1px solid rgba(255,255,255,.10);
+  }
+  .heat-legend .it{display:flex;align-items:baseline;gap:6px;white-space:nowrap}
+  .heat-legend .it i{font-style:normal;font-size:11.5px;color:var(--dim2)}
+  .heat-legend .it b{
+    font-size:13px;font-family:var(--mono);font-weight:700;color:#dbe6f7;letter-spacing:.2px;
+  }
+  .heat-legend .it b.mx{color:var(--accent)}
+  .heat-legend .it b.warm{color:#fbbf24}
+  .heat-legend .sep{width:1px;height:14px;background:var(--line);flex:none}
+
+  /* 词云 */
+  .cloud{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:baseline;align-content:space-between;height:100%}
+  .cloud span{font-weight:700;line-height:1.15}
+  .cloud span:nth-child(3n){color:#7dd3fc}
+  .cloud span:nth-child(3n+1){color:#5eead4}
+  .cloud span:nth-child(3n+2){color:#c7d2fe}
+
+  /* 消息流 */
+  .msg{padding:7px 0;border-bottom:1px dashed rgba(255,255,255,.05);font-size:13px;line-height:1.5}
+  .msg:last-child{border-bottom:0}
+  .msg .mh{display:flex;gap:8px;align-items:center;margin-bottom:3px}
+  .msg .who{font-size:12.5px;color:var(--accent);font-family:var(--mono)}
+  /* 群名/会话名：原来是 10.5px 的暗灰字 + opacity .7，糊成一片看不清。
+     现在提亮到 12.5px，并做成一个浅底小标签，中文用正文字体（等宽字体渲染中文很怪）。 */
+  .msg .rm{
+    font-size:12.5px;color:#a9bcd8;line-height:1.5;
+    background:rgba(255,255,255,.055);border:1px solid rgba(255,255,255,.07);
+    border-radius:6px;padding:1px 8px;
+    max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  }
+  .msg.mine .who{color:#4ade80}
+  .msg .t{font-size:11.5px;color:var(--dim);font-family:var(--mono);margin-left:auto;flex:none}
+  .msg .tx{color:#d5e0f0;word-break:break-word;font-size:13.5px;line-height:1.55}
+
+  /* 搜索结果 */
+  #srWrap{position:fixed;inset:0;background:rgba(4,7,12,.82);backdrop-filter:blur(6px);
+    display:none;flex-direction:column;padding:34px 40px;z-index:50}
+  #srWrap.on{display:flex}
+  #srHead{display:flex;align-items:center;gap:14px;margin-bottom:14px}
+  #srHead .q{font-size:17px;font-weight:700}
+  #srHead .n{font-family:var(--mono);font-size:12.5px;color:var(--accent)}
+  #srHead .digest{font-family:var(--mono);font-size:13px;cursor:pointer;color:#0b1a12;
+    background:linear-gradient(180deg,#43d39a,#1f9d6b);border:1px solid #2ec08a;
+    border-radius:9px;padding:7px 15px;font-weight:700}
+  #srHead .digest:hover{filter:brightness(1.1)}
+  #srHead .digest:disabled{opacity:.5;cursor:default;filter:none}
+  #srHead .x{margin-left:auto;cursor:pointer;color:var(--dim);font-family:var(--mono);font-size:13px;
+    border:1px solid var(--line);border-radius:9px;padding:6px 14px}
+  #srList{flex:1;overflow:auto;columns:2;column-gap:26px}
+  #srList .hit{break-inside:avoid;margin:0 0 12px;padding:11px 14px;border-radius:11px;
+    background:var(--panel);border:1px solid var(--line)}
+  #srList .hit .hh{display:flex;gap:10px;font-size:11.5px;font-family:var(--mono);color:var(--dim2);margin-bottom:5px}
+  #srList .hit .hh .nm{color:var(--accent)}
+  #srList .hit .tt{font-size:14px;color:#e3ebf8;line-height:1.55}
+  /* 平台授权弹层 */
+  #lgWrap{position:fixed;inset:0;background:rgba(4,7,12,.8);backdrop-filter:blur(6px);
+    display:none;align-items:center;justify-content:center;z-index:70}
+  #lgWrap.on{display:flex}
+  #lgPanel{width:min(720px,92vw);max-height:88vh;overflow:auto;display:flex;flex-direction:column;
+    background:var(--panel);border:1px solid var(--line);border-radius:14px;
+    box-shadow:0 24px 70px rgba(0,0,0,.6)}
+  #lgHead{display:flex;align-items:center;gap:14px;padding:14px 20px;border-bottom:1px solid var(--line)}
+  #lgHead .t{font-size:16px;font-weight:700}
+  #lgHead .x{margin-left:auto;cursor:pointer;color:var(--dim);font-family:var(--mono);font-size:13px;
+    border:1px solid var(--line);border-radius:9px;padding:6px 14px}
+  #lgHead .x:hover{color:var(--text);border-color:var(--accent)}
+  #lgBody{padding:18px 20px;display:flex;flex-direction:column;gap:14px;align-items:flex-start}
+  .lgHint{font-size:13.5px;color:#cfdaea;line-height:1.6}
+  .lgUrl{font-family:var(--mono);font-size:12.5px;color:var(--accent);word-break:break-all;
+    border:1px solid var(--line);border-radius:9px;padding:9px 12px;width:100%}
+  .lgUrl a{color:var(--accent)}
+  .lgRaw{font-family:var(--mono);font-size:11px;color:var(--dim2);white-space:pre-wrap;
+    word-break:break-all;margin:0;max-height:260px;overflow:auto;width:100%;
+    border:1px solid var(--line);border-radius:9px;padding:10px;background:rgba(0,0,0,.25)}
+  /* 会话详情弹层 */
+  #cvWrap{position:fixed;inset:0;background:rgba(4,7,12,.8);backdrop-filter:blur(6px);
+    display:none;align-items:center;justify-content:center;z-index:60}
+  #cvWrap.on{display:flex}
+  #cvPanel{width:min(1080px,92vw);height:min(780px,88vh);display:flex;flex-direction:column;
+    background:var(--panel);border:1px solid var(--line);border-radius:14px;overflow:hidden;
+    box-shadow:0 24px 70px rgba(0,0,0,.6)}
+  #cvHead{display:flex;align-items:center;gap:14px;padding:14px 20px;border-bottom:1px solid var(--line)}
+  #cvHead .t{font-size:16px;font-weight:700}
+  #cvHead .n{font-family:var(--mono);font-size:12.5px;color:var(--accent)}
+  #cvHead .x{margin-left:auto;cursor:pointer;color:var(--dim);font-family:var(--mono);font-size:13px;
+    border:1px solid var(--line);border-radius:9px;padding:6px 14px}
+  #cvHead .x:hover{color:var(--text);border-color:var(--accent)}
+  #cvList{flex:1;overflow:auto;padding:6px 20px 10px}
+  #cvFoot{padding:10px 20px;border-top:1px solid var(--line);display:flex;justify-content:center}
+  #cvFoot button{background:#18202f;border:1px solid #2a3654;color:#8fa0ba;border-radius:8px;
+    padding:7px 18px;font-size:12px;cursor:pointer;font-family:var(--mono)}
+  #cvFoot button:hover{color:var(--text);border-color:var(--accent)}
+  /* TOP 会话行可点击 */
+  .conv{cursor:pointer}
+  .conv:hover .nm{color:var(--accent)}
+  .conv:hover .bar i{filter:brightness(1.25)}
+  .empty{color:var(--dim2);font-size:13px;padding:8px 0}
+  /* 加载中的占位：带个小转圈，别让用户以为是"乱码/坏了" */
+  .empty.loading{display:inline-flex;align-items:center;gap:9px}
+  .empty.loading::before{
+    content:'';width:10px;height:10px;border-radius:50%;flex:none;
+    border:2px solid rgba(45,212,191,.28);border-top-color:var(--accent);
+    animation:spin .9s linear infinite;
+  }
+  @keyframes spin{to{transform:rotate(360deg)}}
+  mark{background:rgba(251,191,36,.28);color:#ffe9a8;border-radius:3px;padding:0 2px}
+  /* 状态栏不再在页面底部单开一行。
+     那条独立的状态行看着像页面下面又横出一条边栏，突兀；还贴着窗口最底边，
+     窗口高度一变就被裁掉半截。现在把「实时 / 同步状态 / 时间 / 提示语」
+     全部收回顶栏，紧挨在「刷新」按钮后面，跟其它信息一个层级。 */
+  .pill .st{font-family:var(--mono);font-size:13px;color:var(--dim);white-space:nowrap}
+  .pill .st.live{color:var(--accent)}
+  .pill .vr{width:1px;height:13px;background:var(--line);flex:none;align-self:center;margin:0 1px}
+  .pill .st .d{
+    display:inline-block;width:6px;height:6px;border-radius:50%;margin-right:5px;
+    background:var(--accent);box-shadow:0 0 8px var(--accent);vertical-align:1px;
+  }
+  /* 提示语：不再是顶栏里的一行字（会把搜索框挤掉），
+     改成顶栏下方浮出来的一小块提示条，出现几秒后自己消失，不占任何布局空间。 */
+  .toast{
+    position:absolute;right:22px;top:100%;z-index:60;
+    max-width:440px;padding:8px 14px;border-radius:10px;
+    background:rgba(13,20,32,.95);border:1px solid rgba(45,212,191,.32);
+    color:var(--fg);font-size:12.5px;font-family:var(--mono);line-height:1.35;
+    box-shadow:0 10px 28px rgba(0,0,0,.5);
+    opacity:0;transform:translateY(-6px);pointer-events:none;
+    transition:opacity .22s ease,transform .22s ease;
+  }
+  .toast.on{opacity:1;transform:translateY(0)}
+  .toast.err{border-color:rgba(248,113,113,.5);color:#fecaca}
+  /* 窄屏：顶栏塞不下就按重要性分级收，别把内容裁掉半个 */
+  @media (max-width:1700px){
+    .pill.opt2{display:none}
+  }
+  @media (max-width:1500px){
+    .pill #fTime{display:none}
+  }
+  @media (max-width:1400px){
+    .searchbox input{width:150px}
+    .dd-btn{min-width:112px}
+    .pill .v{font-size:15px}
+    .pill #fSync{display:none}
+    .pill.acct select{max-width:170px}
+  }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand"><div class="brand-line"><span class="dot"></span>微信数据分析 · 大屏</div><span class="signature" title="作者署名">云帆-H1088880</span></div>
+  <div class="pills r1">
+    <div class="pill acct"><span class="k">数据平台</span>
+      <div class="dd" id="platDD">
+        <div class="dd-btn" id="platDDBtn"><span class="cur" id="platDDCur">微信</span><span class="caret"></span></div>
+      </div>
+      <button class="mini" id="btnPlatSync" title="从飞书/钉钉/企业微信拉取最新聊天记录到本地仓库">同步</button>
+      <button class="mini" id="btnPlatLogin" title="为当前平台完成授权（扫码登录）">授权</button>
+    </div>
+    <div class="pill opt2"><span class="k">微信版本</span><span class="v b" id="hVer">-</span></div>
+    <div class="pill"><span class="k">会话</span><span class="v" id="hConv">-</span></div>
+    <div class="pill"><span class="k">消息总量</span><span class="v a" id="hMsg">-</span></div>
+    <span id="hDir" hidden></span>
+  </div>
+  <div class="pills r2">
+    <div class="pill acct"><span class="k">账号</span>
+      <select id="acctSel" title="切换要读取的微信账号"><option value="">加载中…</option></select>
+    </div>
+    <div class="pill">
+      <button id="btnRefresh" title="只重新解密变化的页（秒级）">刷新</button>
+      <span class="v" id="hRefresh" style="font-size:12.5px;color:var(--dim2)">待命</span>
+      <span class="vr"></span>
+      <span class="st live" id="fLive"><i class="d"></i>实时</span>
+      <span class="st" id="fSync" title="自动增量刷新状态">同步中…</span>
+      <span class="st" id="fTime">--:--:--</span>
+    </div>
+  </div>
+  <div id="fHint" class="toast"></div>
+  <div class="headright">
+    <div class="searchbox">
+      <input id="q" placeholder="搜索聊天记录…（回车）" autocomplete="off">
+      <button onclick="doSearch()">搜索</button>
+    </div>
+    <a class="backlink" id="backlink" href="#" title="回到微信解密功能区">← 返回解密</a>
+    <button id="btnQuit" title="彻底关闭大屏窗口（ESC 也能关）" style="background:#18202f;border:1px solid #2a3654;color:#8fa0ba;border-radius:8px;padding:6px 11px;font-size:12.5px;cursor:pointer">✕ 关闭</button>
+  </div>
+</header>
+
+<!-- 平台下拉菜单：故意放在 header 之外、body 之下。
+     顶栏 .pills 上有 overflow:hidden（防止药丸撑破顶栏），
+     菜单若留在顶栏里会被整块裁掉 —— 展开后一个选项都看不见。
+     放这里用 position:fixed + JS 实测坐标定位，不受任何祖先裁剪影响。 -->
+<div class="dd-menu" id="platDDMenu"></div>
+
+<main>
+  <div class="col">
+    <div class="card" style="flex:1.05">
+      <h2>TOP 会话 <span class="tag" id="convTag">0</span></h2>
+      <div class="body" id="convs"><div class="empty loading">正在载入…</div></div>
+    </div>
+    <div class="card" style="flex:.95">
+      <h2>最近消息流</h2>
+      <div class="body" id="feed"><div class="empty loading">正在载入…</div></div>
+    </div>
+  </div>
+
+  <div class="col">
+    <div class="card" style="flex:1.28">
+      <h2>活跃时段热力 <span class="tag">7×24</span></h2>
+      <div class="body"><div class="heat" id="heat"></div></div>
+    </div>
+    <div class="card" style="flex:1">
+      <h2>高频词 <span class="tag" id="scWords">—</span></h2>
+      <div class="body"><div class="cloud" id="words"></div></div>
+    </div>
+  </div>
+
+  <div class="col">
+    <div class="card" style="flex:0.85">
+      <h2>表情统计</h2>
+      <div class="body" id="emojis"><div class="empty loading">正在载入…</div></div>
+    </div>
+    <div class="card" style="flex:1.5">
+      <h2>数据链路 <span class="tag" id="flowTag">就绪</span></h2>
+      <div class="cap">
+        <span class="lock">🔒</span>
+        <span>只读取<b>你自己的</b>聊天记录做统计</span>
+        <span class="sub">不写库 · 不发消息 · 不连接微信</span>
+      </div>
+      <div class="body" style="padding:13px 15px;display:flex;flex-direction:column;gap:9px;overflow:auto">
+        <div class="flow" id="flow">
+          <div class="step ok"><span class="dot ok"></span><span class="tx"><b>启动</b><i>定位账号</i></span><span class="v" id="fvAcct">—</span></div>
+          <div class="step ok"><span class="dot ok"></span><span class="tx"><b>探测</b><i>扫描加密库</i></span><span class="v" id="fvScan">—</span></div>
+          <div class="step ok"><span class="dot ok"></span><span class="tx"><b>解密</b><i>只读提取</i></span><span class="v" id="fvDec">—</span></div>
+          <div class="step ok"><span class="dot ok"></span><span class="tx"><b>载入</b><i>建索引</i></span><span class="v" id="fvLoad">—</span></div>
+          <div class="step live" id="flowLive"><span class="dot live"></span><span class="tx"><b>统计</b><i>持续刷新</i></span><span class="v" id="fvStat">—</span></div>
+        </div>
+        <div class="kv">
+          <div><span>自动刷新</span><b id="kvAuto">每 20 秒</b></div>
+          <div><span>搜索方式</span><b>全库 LIKE</b></div>
+          <div><span>结果排序</span><b>时间倒序</b></div>
+        </div>
+        <div class="syn">
+          <div><span>上次同步</span><b id="synLast">—</b></div>
+          <div><span>本轮新增</span><b id="synChanged" class="good">—</b></div>
+          <div><span>累计轮次</span><b id="synCycles" class="live">—</b></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</main>
+
+<div id="srWrap">
+  <div id="srHead">
+    <span class="q" id="srQ"></span>
+    <span class="n" id="srN"></span>
+    <button class="digest" id="btnDigest" onclick="doDigest()" title="把搜索结果一键整理成 Word 文档">⬇ 一键整理成 Word</button>
+    <span class="x" onclick="closeSr()">关闭 ESC</span>
+  </div>
+  <div id="srList"></div>
+</div>
+
+<!-- 平台授权弹层 -->
+<div id="lgWrap">
+  <div id="lgPanel">
+    <div id="lgHead">
+      <span class="t" id="lgTitle">平台授权</span>
+      <span class="x" onclick="closeLogin()">关闭 ESC</span>
+    </div>
+    <div id="lgBody">
+      <div class="lgHint" id="lgHint">正在准备登录…</div>
+      <div class="lgUrl" id="lgUrl"></div>
+      <img id="lgQr" alt="二维码" style="display:none;max-width:220px;background:#fff;padding:10px;border-radius:10px">
+      <pre id="lgRaw" class="lgRaw"></pre>
+    </div>
+  </div>
+</div>
+
+<!-- 会话详情弹层：点击 TOP 会话后打开，查看该会话的消息记录 -->
+<div id="cvWrap">
+  <div id="cvPanel">
+    <div id="cvHead">
+      <span class="t" id="cvTitle">会话详情</span>
+      <span class="n" id="cvMeta"></span>
+      <span class="x" onclick="closeConv()">关闭 ESC</span>
+    </div>
+    <div id="cvList"></div>
+    <div id="cvFoot">
+      <button id="cvMore" onclick="loadConvMore()">加载更多</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const fmtN = n => (n == null ? '-' : (n >= 10000 ? (n/10000).toFixed(1) + '万' : String(n)));
+// ---- 显示名净化 ----
+// 后端已经把「解析不到名字」的情况返回空串，这里再加一道保险：
+// 万一某个字段漏出了原始标识（wxid_ / md5 / @chatroom / gh_），
+// 也不让它直接出现在界面上 —— 原始 ID 对用户毫无意义，
+// 反而会被当成「功能坏了」。宁可显示占位文案。
+const RAW_ID_RE = /^(wxid_|gh_|v3_|sh_|wxaurl_)/i;
+function dispName(n){
+  const s = (n == null ? '' : String(n)).trim();
+  if(!s) return '';
+  if(RAW_ID_RE.test(s)) return '';          // wxid_xxx / gh_xxx / v3_xxx
+  if(/^[0-9a-f]{32}$/i.test(s)) return '';  // 32 位 md5
+  if(/@chatroom$/i.test(s)) return '';      // 群 ID（没解析出群名）
+  if(/^\d{6,}@/.test(s)) return '';         // 其它数字前缀标识
+  return s;
+}
+const UNKNOWN_PERSON = '未知联系人';
+const UNKNOWN_ROOM = '未知会话';
+// 相对时间：刚刚 / N分钟前 / N小时前 / N天前 / MM-DD
+function fmtAgo(ts){
+  if(!ts) return '';
+  const now = Date.now() / 1000;
+  let d = Math.floor(now - ts);
+  if(d < 0) d = 0;
+  if(d < 60) return '刚刚';
+  if(d < 3600) return Math.floor(d/60) + '分前';
+  if(d < 86400) return Math.floor(d/3600) + '时前';
+  if(d < 86400*7) return Math.floor(d/86400) + '天前';
+  const dt = new Date(ts * 1000);
+  return (dt.getMonth()+1) + '-' + String(dt.getDate()).padStart(2,'0');
+}
+
+// 单个面板渲染失败时只记日志，不影响整屏刷新
+function safeCall(fn){
+  try { fn(); }
+  catch(e){ console.error('[panel] render failed:', e); }
+}
+
+// ---- 接口基址 ----------------------------------------------------
+// 大屏有三种打开方式：
+//   1) http://127.0.0.1:7890/bigscreen.html  → 同源，相对路径可用
+//   2) 反代 /wa/bigscreen.html               → 同源，相对路径可用
+//   3) file:// 直接打开（IDE 预览 / 双击 HTML）→ 相对路径会被浏览器解析成
+//      file:///.../api/dash 并直接拒绝，控制台报
+//      "Cross origin requests are only supported for protocol schemes: http, https..."
+//      前端最终只看到 "TypeError: Failed to fetch"，完全不知道真实原因。
+//      第 3 种必须换成绝对地址；也允许用 ?api=http://host:port 显式指定。
+const API_BASE = (() => {
+  try {
+    const q = new URLSearchParams(location.search).get('api');
+    if (q) return q.replace(/\/+$/, '');
+    if (location.protocol === 'file:') {
+      const saved = localStorage.getItem('wb_api_base');
+      if (saved) return saved.replace(/\/+$/, '');
+      return 'http://127.0.0.1:7890';
+    }
+  } catch (e) {
+    // file:// 下部分浏览器禁用 localStorage / URLSearchParams，退回默认端口
+    if (location.protocol === 'file:') return 'http://127.0.0.1:7890';
+  }
+  return '';
+})();
+
+// 把 'api/xxx' 或 '/api/xxx' 转成可直接 fetch 的地址。
+// 注意：页面里所有调用点传的都是**不带前导斜杠**的 'api/xxx'，
+// 所以不能只判断首字符是不是 '/'，否则 file:// 入口下会原样透传，
+// 被浏览器解析成 file:///.../api/xxx 而直接拒绝。
+function apiUrl(p){
+  if (!p) return p;
+  if (/^https?:\/\//i.test(p)) return p;   // 已经是绝对地址
+  if (API_BASE) return API_BASE + '/' + String(p).replace(/^\/+/, '');
+  return p;                                 // 同源：保持相对路径（/wa/ 反代也适用）
+}
+
+// 相对路径：直连 7890 与大屏反代 /wa/ 两种入口都可用
+async function api(p){
+  const r = await fetch(apiUrl(p), {cache:'no-store'});
+  return r.json();
+}
+
+function fmtTime(t){
+  if(!t) return '';
+  const d = new Date(t * 1000);
+  const p = n => String(n).padStart(2,'0');
+  return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+let HEATMAX = 1;
+
+// 热力图配色：低 → 高，深蓝 → 青 → 绿 → 黄 → 橙（GitHub contribution 风格）
+const HEAT_STEPS = [
+  {t:0.00, c:[22,32,52]},    // 空
+  {t:0.12, c:[30,64,110]},   // 深蓝
+  {t:0.32, c:[22,124,168]},  // 蓝
+  {t:0.52, c:[32,178,170]},  // 青
+  {t:0.72, c:[120,205,110]}, // 绿
+  {t:0.88, c:[232,196,79]},  // 黄
+  {t:1.00, c:[240,130,86]},  // 橙
+];
+
+function heatColor(ratio){
+  const t = Math.max(0, Math.min(1, ratio));
+  let a = HEAT_STEPS[0], b = HEAT_STEPS[HEAT_STEPS.length-1];
+  for(let i=0;i<HEAT_STEPS.length-1;i++){
+    if(t >= HEAT_STEPS[i].t && t <= HEAT_STEPS[i+1].t){
+      a = HEAT_STEPS[i]; b = HEAT_STEPS[i+1]; break;
+    }
+  }
+  const span = (b.t - a.t) || 1;
+  const k = (t - a.t) / span;
+  const r = Math.round(a.c[0] + (b.c[0]-a.c[0]) * k);
+  const g = Math.round(a.c[1] + (b.c[1]-a.c[1]) * k);
+  const bl= Math.round(a.c[2] + (b.c[2]-a.c[2]) * k);
+  return `rgb(${r},${g},${bl})`;
+}
+
+function renderHeat(heat){
+  const box = $('#heat');
+  const days = ['一','二','三','四','五','六','日'];
+  const dayFull = ['周一','周二','周三','周四','周五','周六','周日'];
+  const rows = heat || [];
+  let mx = 1;
+  rows.forEach(r => (r||[]).forEach(v => { if(v > mx) mx = v; }));
+  HEATMAX = mx;
+
+  // ── 24 小时汇总（跨 7 天），用于顶部剖面曲线
+  const hourSum = new Array(24).fill(0);
+  rows.forEach(r => (r||[]).forEach((v,i) => { if(i < 24) hourSum[i] += (v||0); }));
+  const hmx = Math.max(1, ...hourSum);
+  const peakH = hourSum.indexOf(hmx);
+
+  // 单格峰值（某一天某一小时）与跨天汇总峰值是两个口径，图例要分开写清楚
+  let cellMax = 0, cellAt = null;
+  rows.forEach((r,di) => (r||[]).forEach((v,hi) => {
+    if(v > cellMax){ cellMax = v; cellAt = {di, hi}; }
+  }));
+
+  // 剖面曲线：Catmull-Rom → 贝塞尔，画成平滑面积图
+  // x 用 (i+0.5)/24 —— 正好落在时段带每个色格的中心，曲线峰值与最热的格子对齐
+  // 底部留 BASE 高度的空白，渐变填充不会压到下方的小时刻度
+  const VW = 600, VH = 94, BASE = 8, CAP = 19;   // CAP = 曲线标题占的高度
+  const pts = hourSum.map((v,i) => [
+    ((i+0.5)/24)*VW,
+    VH - BASE - (v/hmx)*(VH-BASE-14),
+  ]);
+  let line = `M ${pts[0][0].toFixed(1)} ${pts[0][1].toFixed(1)}`;
+  for(let i=0;i<pts.length-1;i++){
+    const p0 = pts[Math.max(0,i-1)], p1 = pts[i], p2 = pts[i+1], p3 = pts[Math.min(pts.length-1,i+2)];
+    const c1x = p1[0] + (p2[0]-p0[0])/6, c1y = p1[1] + (p2[1]-p0[1])/6;
+    const c2x = p2[0] - (p3[0]-p1[0])/6, c2y = p2[1] - (p3[1]-p1[1])/6;
+    line += ` C ${c1x.toFixed(1)} ${c1y.toFixed(1)}, ${c2x.toFixed(1)} ${c2y.toFixed(1)}, ${p2[0].toFixed(1)} ${p2[1].toFixed(1)}`;
+  }
+  // 渐变填充区止于基准线（VH-BASE），下方留白给刻度，避免糊住文字
+  const area = `${line} L ${VW} ${VH-BASE} L 0 ${VH-BASE} Z`;
+  const peakX = ((peakH+0.5)/24*100);
+  const peakY = pts[peakH][1];
+  // 基准线：渐变区底部画一条淡横线，视觉上有个"地平线"
+  const base = `<line x1="0" y1="${VH-BASE}" x2="${VW}" y2="${VH-BASE}" stroke="rgba(255,255,255,.10)" stroke-width="1" vector-effect="non-scaling-stroke"/>`;
+
+  // ── 7 条时段带：每行一天，24 格无缝拼成一条渐变缎带
+  const seg = 100/24;
+  let band = '';
+  rows.forEach((row, di) => {
+    const isWe = (di === 5 || di === 6);
+    const cells = [];
+    const stops = [];
+    const hits = [];
+    for(let hi=0; hi<24; hi++){
+      const v = (row && row[hi]) || 0;
+      const ratio = mx > 0 ? v/mx : 0;
+      const col = v <= 0 ? 'rgba(255,255,255,.045)' : heatColor(Math.pow(ratio, 0.62));
+      stops.push(`${col} ${(hi*seg).toFixed(3)}% ${((hi+1)*seg).toFixed(3)}%`);
+      // 悬停提示只报「几点几分 · 多少条」。
+      // 原来前面还缀着「五日」，但这一行左侧已经写着是周几，
+      // 重复一遍纯属废话（用户原话：「没必要吧，无用功」）。
+      hits.push(`<i style="left:${(hi*seg).toFixed(3)}%;width:${seg.toFixed(3)}%" title="${String(hi).padStart(2,'0')}:00 · ${fmtN(v)} 条"></i>`);
+    }
+    band += `<div class="hrow${isWe?' we':''}">
+      <span class="d">${days[di]||''}</span>
+      <span class="seg" style="background:linear-gradient(90deg,${stops.join(',')})">${hits.join('')}</span>
+    </div>`;
+  });
+
+  // 图例色带：直接用热力配色生成，保证和上面的色块是同一套颜色
+  const ramp = 'linear-gradient(90deg,' + HEAT_STEPS.map(s =>
+    `${heatColor(s.t)} ${(s.t * 100).toFixed(0)}%`).join(',') + ')';
+  const pk = String(peakH).padStart(2,'0');
+  const cellTxt = cellAt ? `${dayFull[cellAt.di]} ${String(cellAt.hi).padStart(2,'0')}:00` : '—';
+
+  box.innerHTML = `
+    <div class="hprof">
+      <div class="hprof-cap">各小时消息量 · 7 天合计</div>
+      <svg viewBox="0 0 ${VW} ${VH}" preserveAspectRatio="none">
+        <defs>
+          <linearGradient id="hpg" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="#38bdf8" stop-opacity=".46"/>
+            <stop offset="60%" stop-color="#2dd4bf" stop-opacity=".16"/>
+            <stop offset="100%" stop-color="#2dd4bf" stop-opacity="0"/>
+          </linearGradient>
+        </defs>
+        <path d="${area}" fill="url(#hpg)"/>
+        <path class="ln" d="${line}"/>
+        ${base}
+      </svg>
+      <div class="hp-peak" style="left:${peakX.toFixed(2)}%;top:${(peakY + CAP).toFixed(1)}px" title="跨 7 天汇总，${pk}:00 最活跃，共 ${fmtN(hmx)} 条"><i></i><b>${pk}:00</b></div>
+      <div class="hp-x">
+        <span style="left:0%">0</span>
+        <span style="left:${(6/24*100).toFixed(2)}%">6</span>
+        <span style="left:${(12/24*100).toFixed(2)}%">12</span>
+        <span style="left:${(18/24*100).toFixed(2)}%">18</span>
+        <span style="left:100%">24</span>
+      </div>
+    </div>
+    <div class="hmat">${band}</div>
+    <div class="heat-legend">
+      <div class="lg">
+        <span class="lt">每格消息数</span>
+        <span class="ramp" style="background:${ramp}"></span>
+        <span class="lt mute">少</span>
+        <span class="lt mute">多</span>
+      </div>
+      <span class="sep"></span>
+      <div class="it"><i>最活跃时段</i><b class="mx">${pk}:00–${String((peakH+1)%24).padStart(2,'0')}:00</b><i>共</i><b>${fmtN(hmx)} 条</b></div>
+      <span class="sep"></span>
+      <div class="it"><i>最热的一格</i><b class="warm">${cellTxt}</b><i>共</i><b>${fmtN(mx)} 条</b></div>
+    </div>`;
+}
+
+function renderConvs(list){
+  const box = $('#convs');
+  if(!list || !list.length){ box.innerHTML = '<div class="empty">暂无会话数据（可能仍在后台统计）</div>'; return; }
+  const mx = Math.max(...list.map(c => c.count), 1);
+  box.innerHTML = list.map(c => {
+    const w = Math.max(2, Math.round(c.count / mx * 100));
+    // 最后活跃时间：会话有消息但很久没人说话了，跟「刚在聊」要区分开
+    const lt = c.last_time ? fmtAgo(c.last_time) : '';
+    const ltTitle = c.last_time ? ('最后活跃：' + fmtTime(c.last_time * 1000)) : '';
+    // 显示名：解析不到就用占位文案，绝不把原始 ID 打到界面上
+    const nm = dispName(c.name) || UNKNOWN_ROOM;
+    // talker 用 data-* 挂上，点击后按 talker 拉该会话的消息
+    return `<div class="conv" data-talker="${esc(c.talker || '')}" data-name="${esc(nm)}"
+      data-count="${c.count || 0}" title="${esc(nm)}${ltTitle ? '\n' + ltTitle : ''}\n点击查看该会话记录">
+      <div class="nm" title="${esc(nm)}">${esc(nm)}</div>
+      <div class="bar"><i style="width:${w}%"></i></div>
+      <div class="ct">${fmtN(c.count)}</div>
+      ${lt ? `<div class="ag">${lt}</div>` : '<div class="ag"></div>'}</div>`;
+  }).join('');
+  $('#convTag').textContent = list.length;
+  // 绑定点击
+  box.querySelectorAll('.conv').forEach(el => {
+    el.addEventListener('click', () => {
+      openConv(el.dataset.talker, el.dataset.name, el.dataset.count);
+    });
+  });
+}
+
+function renderFeed(list){
+  const box = $('#feed');
+  if(!list || !list.length){ box.innerHTML = '<div class="empty">暂无消息</div>'; return; }
+  box.innerHTML = list.map(m => {
+    // 发言人：私聊用对方昵称，群聊用消息内解析出的真实发送者
+    const roomNm = dispName(m.name);
+    const who = m.isSend ? '我' : (dispName(m.sender_name) || roomNm || UNKNOWN_PERSON);
+    const room = (roomNm && roomNm !== who)
+      ? `<span class="rm" title="${esc(roomNm)}">${esc(roomNm)}</span>` : '';
+    return `<div class="msg${m.isSend ? ' mine' : ''}">
+    <div class="mh"><span class="who">${esc(who)}</span>${room}<span class="t">${fmtTime(m.time)}</span></div>
+    <div class="tx">${esc(m.content)}</div></div>`;
+  }).join('');
+}
+
+function renderWords(list){
+  const box = $('#words');
+  if(!list || !list.length){ box.innerHTML = '<div class="empty">暂无词频数据</div>'; return; }
+  const mx = Math.max(...list.map(x => x.c), 1);
+  box.innerHTML = list.map(x => {
+    const sz = 12 + 26 * Math.pow(x.c / mx, 0.6);
+    return `<span style="font-size:${sz.toFixed(1)}px" title="${x.c} 次">${esc(x.w)}</span>`;
+  }).join('');
+}
+
+function renderEmojis(list){
+  const box = $('#emojis');
+  if(!list || !list.length){ box.innerHTML = '<div class="empty">暂无表情数据</div>'; return; }
+  const mx = Math.max(...list.map(x => x.c), 1);
+  // 方格阵：一屏铺满，格子底色即热度
+  box.innerHTML = '<div class="emogrid">' + list.map(x => {
+    const w = Math.max(5, Math.round(x.c / mx * 100));
+    return `<div class="e" title="${esc(x.e)} · ${x.c} 次">
+      <div class="fill" style="width:${w}%"></div>
+      <span class="ch">${esc(x.e)}</span>
+      <span class="n">${x.c}</span>
+    </div>`;
+  }).join('') + '</div>';
+}
+
+let lastDir = null;
+let LAST_LOADING = false;
+let LAST_ACCT = '';
+let ACCT_LIST = [];
+
+// ── 会话详情弹层 ──────────────────────────────────────────────────────────
+let CONV_STATE = { talker: '', page: 0, done: false, loading: false, total: 0 };
+
+async function openConv(talker, name, count){
+  if(!talker) return;
+  CONV_STATE = { talker, page: 0, done: false, loading: false, total: Number(count) || 0 };
+  $('#cvTitle').textContent = dispName(name) || UNKNOWN_ROOM;
+  $('#cvMeta').textContent = (count ? fmtN(count) + ' 条消息' : '');
+  $('#cvList').innerHTML = '<div class="empty">加载中…</div>';
+  $('#cvMore').style.display = 'none';
+  $('#cvWrap').classList.add('on');
+  await loadConvMore();
+}
+
+async function loadConvMore(){
+  if(CONV_STATE.loading || CONV_STATE.done) return;
+  CONV_STATE.loading = true;
+  const more = $('#cvMore');
+  more.textContent = '加载中…';
+  const box = $('#cvList');
+  // 记录插入前的高度：更早的消息要插到**顶部**，
+  // 插完后把滚动位置补偿回去，视图才不会跳动。
+  const prevH = box.scrollHeight;
+  const prevTop = box.scrollTop;
+  try{
+    // order=desc：取最新的消息；显示时再翻转成时间正序（最新在底部）
+    const d = await api('api/messages?talker=' + encodeURIComponent(CONV_STATE.talker)
+                        + '&page=' + CONV_STATE.page + '&order=desc');
+    const msgs = (d && d.messages) || [];
+    if(d && typeof d.count === 'number') CONV_STATE.total = d.count;
+    if(CONV_STATE.page === 0) box.innerHTML = '';
+    if(!msgs.length && CONV_STATE.page === 0){
+      box.innerHTML = '<div class="empty">该会话没有可显示的消息</div>';
+    } else {
+      // 后端按 desc（最新在前）返回，翻转成时间正序（最早在前）。
+      // page=0 是最新的一页 → 追加到**底部**；
+      // page>0 是更早的一页 → 必须插到**顶部**，
+      // 否则会出现「最新消息之后又冒出更早消息」的错序，
+      // 而且新加载的内容在视口外，用户看着像"没加载出来"。
+      const html = msgs.slice().reverse().map(m => {
+        const who = m.isSend ? '我'
+          : (dispName(m.sender_name) || dispName(m.name) || dispName(CONV_STATE.talker) || UNKNOWN_PERSON);
+        return `<div class="msg${m.isSend ? ' mine' : ''}">
+          <div class="mh"><span class="who">${esc(who)}</span><span class="t">${fmtTime(m.time)}</span></div>
+          <div class="tx">${esc(m.content)}</div></div>`;
+      }).join('');
+      if(CONV_STATE.page === 0){
+        box.insertAdjacentHTML('beforeend', html);
+      }else{
+        box.insertAdjacentHTML('afterbegin', html);
+        // 顶部插入后补偿滚动位置，保持用户当前看到的消息不动
+        box.scrollTop = prevTop + (box.scrollHeight - prevH);
+      }
+    }
+    CONV_STATE.page++;
+    // 还能继续翻就显示"加载更多"（继续往更早的方向翻）
+    //
+    // 关键：判断依据必须是 has_more（后端按**原始行数**算的），
+    // 不能用 msgs.length >= 80 —— 因为 db 层会过滤掉空内容/纯表情，
+    // 一页 80 行过滤后可能只剩 56 条，用过滤后的条数会误判成最后一页，
+    // 结果「加载更早的消息」按钮永远不出现，用户只能看到最近一页。
+    if(d && typeof d.has_more === 'boolean'){
+      CONV_STATE.done = !d.has_more;
+    }else{
+      CONV_STATE.done = !(msgs.length >= 80);
+    }
+    if(!CONV_STATE.done){
+      more.style.display = '';
+      more.textContent = '加载更早的消息';
+    } else {
+      more.style.display = 'none';
+    }
+    $('#cvMeta').textContent = fmtN(CONV_STATE.total) + ' 条消息';
+    // 首次加载后自动滚到底部（最新消息）
+    if(CONV_STATE.page === 1 && msgs.length){
+      box.scrollTop = box.scrollHeight;
+    }
+  }catch(e){
+    box.insertAdjacentHTML('beforeend',
+      `<div class="empty">加载失败：${esc(String(e && e.message || e))}</div>`);
+    more.style.display = 'none';
+  }finally{
+    CONV_STATE.loading = false;
+  }
+}
+
+function closeConv(){
+  $('#cvWrap').classList.remove('on');
+  CONV_STATE = { talker: '', page: 0, done: false, loading: false, total: 0 };
+}
+
+// 收起平台下拉框
+function closeDD(){
+  const dd = document.getElementById('platDD');
+  if (dd) dd.classList.remove('open');
+  const menu = document.getElementById('platDDMenu');
+  if (menu) menu.classList.remove('on');
+}
+
+// 账号显示名：优先用昵称；查不到昵称就退到「短微信号」——
+// 去掉数据目录名的随机后缀（<wxid>_<随机>）与 wxid_ 前缀，
+// 剩下的才是真正的微信号本身，比整串目录名干净得多。
+function acctLabel(a){
+  const nick = ((a && a.nick) || '').trim();
+  if(nick) return nick;
+  let s = ((a && a.account) || '').trim();
+  if(!s) return '未知账号';
+  const i = s.lastIndexOf('_');
+  if(i > 0) s = s.slice(0, i);
+  if(/^wxid_/i.test(s)) s = s.slice(5);
+  return s || a.account;
+}
+
+// 账号下拉：只列出真正的账号（有消息库），并标注密钥/解密状态
+function renderAccounts(list, current){
+  const sel = $('#acctSel');
+  if(!sel) return;
+  ACCT_LIST = (list || []).filter(a => a.has_message);
+  if(!ACCT_LIST.length){
+    sel.innerHTML = '<option value="">未发现账号</option>';
+    sel.disabled = true;
+    return;
+  }
+  const cur = ACCT_LIST.find(a => a.account === current) || ACCT_LIST[0];
+  sel.disabled = false;
+  sel.innerHTML = ACCT_LIST.map(a => {
+    const tag = a.decrypted ? '已解密' : (a.key_known ? '密钥已记' : '需提取');
+    const full = a.account || '';
+    // 正文只放友好名，完整账号标识放进 title（悬停可见，便于辨识）
+    return `<option value="${esc(full)}"${full===cur.account?' selected':''}`
+         + ` title="${esc(full + ' · ' + tag)}">${esc(acctLabel(a))} · ${tag}</option>`;
+  }).join('');
+  LAST_ACCT = cur.account;
+}
+
+// 切换账号：只读该账号自己的数据，绝不混读
+async function switchAccount(acct){
+  if(!acct || acct === LAST_ACCT) return;
+  const sel = $('#acctSel');
+  sel.disabled = true;
+  const label = acctLabel(ACCT_LIST.find(a => a.account === acct));
+  setHint('正在切换到账号 ' + label + '…');
+  try{
+    const d = await api('api/account/use?account=' + encodeURIComponent(acct));
+    if(d && d.ok){
+      LAST_ACCT = acct;
+      lastDir = null;
+      setHint('已切换到 ' + label);
+      // 立刻重新拉一次
+      setTimeout(refresh, 200);
+    }else{
+      setHint('切换失败：' + ((d && d.error) || '未知错误'));
+    }
+  }catch(e){
+    setHint('切换失败：' + esc(String(e)), 9000, true);
+  }finally{
+    setTimeout(()=>{ sel.disabled = false; }, 800);
+  }
+}
+
+// ── 多平台（飞书 / 钉钉 / 企业微信）────────────────────────────────────
+let CUR_PLAT = 'wechat';     // 'wechat' 表示本地微信；其他为 cloudstore 里的平台 key
+let PLAT_LIST = [];
+
+// 渲染平台下拉：微信 + 三个云端平台，标注可用状态
+// 后端平台探测在后台异步跑，首次可能返回空列表；
+// 这里用固定骨架兜底，保证下拉框里三个云端平台永远都在（状态先显示"检测中"）。
+const PLAT_SKELETON = [
+  { key: 'wecom',    label: '企业微信' },
+  { key: 'feishu',   label: '飞书'     },
+  { key: 'dingtalk', label: '钉钉'     },
+];
+
+// 平台下拉菜单的定位：菜单挂在 body 下用 position:fixed，
+// 坐标必须按按钮的实测位置算（顶栏是 grid，百分比参照 body 宽度会对不上）。
+function placeDD(){
+  const btn = document.getElementById('platDDBtn');
+  const menu = document.getElementById('platDDMenu');
+  if(!btn || !menu) return;
+  const r = btn.getBoundingClientRect();
+  const w = Math.max(menu.offsetWidth, r.width, 150);
+  let left = r.left;
+  // 贴到窗口右边缘时往左收，避免菜单被切掉
+  if(left + w > window.innerWidth - 10) left = Math.max(10, window.innerWidth - w - 10);
+  menu.style.left = Math.round(left) + 'px';
+  menu.style.top  = Math.round(r.bottom + 5) + 'px';
+  menu.style.minWidth = Math.round(w) + 'px';
+}
+
+function renderPlatforms(list){
+  PLAT_LIST = list || [];
+  const menu = $('#platDDMenu');
+  const cur = $('#platDDCur');
+  if(!menu || !cur) return;
+  const items = [{ key: 'wechat', label: '微信（本地）', ok: true, msgs: 0 }];
+  PLAT_LIST.forEach(p => {
+    items.push({
+      key: p.key, label: p.label,
+      ok: !!p.authorized,
+      installed: !!p.installed,
+      msgs: p.messages || 0,
+      convs: p.conversations || 0,
+      detail: p.detail || '',
+    });
+  });
+  // 骨架兜底：后端还没探测出来时，三个云端平台也先占位
+  PLAT_SKELETON.forEach(sk => {
+    if(!items.find(x => x.key === sk.key)){
+      items.push({ key: sk.key, label: sk.label, ok: false, installed: true,
+                   msgs: 0, convs: 0, detail: '状态检测中…' });
+    }
+  });
+  menu.innerHTML = items.map(it => {
+    const dotCls = it.key === 'wechat' ? 'ok' : (it.ok ? 'ok' : 'no');
+    // 已授权但一条消息都没有 ≠ 未授权。
+    // 以前写成 `it.msgs ? ... : '未授权'`，导致「已授权、消息数 0」的平台
+    // （比如刚授权完还没同步的企业微信）被标成未授权，看着像掉线了。
+    const cnt = it.key === 'wechat' ? ''
+      : (it.msgs ? fmtN(it.msgs)
+      : (it.ok ? '0 条'
+      : (it.installed ? '未授权' : '未安装')));
+    return `<div class="dd-item${it.key===CUR_PLAT?' sel':''} ${dotCls}" data-key="${esc(it.key)}">
+      <span class="dot"></span><span class="lbl">${esc(it.label)}</span>
+      <span class="cnt">${esc(cnt)}</span></div>`;
+  }).join('');
+  menu.querySelectorAll('.dd-item').forEach(el => {
+    el.addEventListener('click', () => {
+      closeDD();
+      switchPlatform(el.dataset.key);
+    });
+  });
+  const now = items.find(x => x.key === CUR_PLAT) || items[0];
+  cur.textContent = now.label + (now.key !== 'wechat' ? (now.ok ? '' : ' · 未授权') : '');
+  // 菜单开着时重渲染过（宽度可能变了），重新定位一次
+  const dd = document.getElementById('platDD');
+  if(dd && dd.classList.contains('open')) placeDD();
+}
+
+// 切换到某个云端平台：拉该平台的会话 + 消息，重绘三个面板
+async function switchPlatform(key){
+  if(!key || key === CUR_PLAT) return;
+  setHint('正在加载平台数据…');
+  // 切回本地微信：重新拉一次 dash，把微信侧的会话/消息/统计全部还原。
+  // （否则从云端平台切回来会留下空列表，因为云端接口没有 wechat 的数据）
+  if(key === 'wechat'){
+    CUR_PLAT = 'wechat';
+    renderPlatforms(PLAT_LIST);
+    try{
+      await refresh();
+      return;
+    }catch(e){
+      CUR_PLAT = key;
+    }
+  }
+  try{
+    const p = PLAT_LIST.find(x => x.key === key);
+    if(p && !p.authorized){
+      setHint((p.label || key) + ' 未授权：' + (p.detail || '请在连接器面板完成登录'));
+    }
+    const [cd, rd] = await Promise.all([
+      api('api/platform/conversations?platform=' + encodeURIComponent(key)),
+      api('api/platform/recent?platform=' + encodeURIComponent(key) + '&limit=100'),
+    ]);
+    CUR_PLAT = key;
+    renderPlatforms(PLAT_LIST);
+    // 顶部指标
+    const convs = (cd && cd.conversations) || [];
+    const total = convs.reduce((s,c)=> s + (c.msg_count||0), 0);
+    $('#hVer').textContent = (p && p.label) || key;
+    $('#hConv').textContent = fmtN(convs.length);
+    $('#hMsg').textContent = fmtN(total);
+    const hd = $('#hDir'); if(hd) hd.textContent = '云端仓库 · ' + ((p && p.label) || key);
+    // 面板
+    renderConvs(convs.map(c => ({
+      name: c.name || c.conversation_id,
+      talker: c.conversation_id,
+      count: c.msg_count || 0,
+    })));
+    renderFeed((rd && rd.messages) || []);
+    // 云端平台的统计（热力/词频/表情）由 /api/platform/stats 提供，
+    // 算法复用 db.word_emoji_freq（噪声过滤与人名停用词都在那边）。
+    try{
+      const st = await api('api/platform/stats?platform=' + encodeURIComponent(key));
+      if(st){
+        // renderHeat 收的是二维数组（7×24），不是 {grid:...}
+        const grid = (st.heatmap && st.heatmap.grid) || st.heatmap || [];
+        if(grid.length) renderHeat(grid);
+        else $('#heat').innerHTML = '<div class="empty">云端平台暂无活跃时段统计</div>';
+        // renderWords 收 [{w,c}]，renderEmojis 收 [{e,c}]
+        if(st.words && st.words.length) renderWords(st.words);
+        else $('#words').innerHTML = '<div class="empty">云端平台暂无词频统计</div>';
+        if(st.emojis && st.emojis.length) renderEmojis(st.emojis);
+        else $('#emojis').innerHTML = '<div class="empty">云端平台无表情统计</div>';
+      }
+    }catch(e){
+      $('#heat').innerHTML = '<div class="empty">统计加载失败</div>';
+    }
+    setHint((p && p.label || key) + ' · 已加载 ' + convs.length + ' 个会话');
+  }catch(e){
+    setHint('平台数据加载失败：' + esc(String(e)), 9000, true);
+  }
+}
+
+// 触发平台同步（拉取在线聊天记录到本地仓库）
+async function syncPlatforms(key){
+  const btn = $('#btnPlatSync');
+  if(btn) { btn.disabled = true; }
+  setHint('正在同步平台数据…');
+  try{
+    const q = key ? ('?platform=' + encodeURIComponent(key)) : '';
+    const d = await api('api/platform/sync' + q);
+    const rs = (d && d.results) || [];
+    let okc = 0, msgc = 0;
+    rs.forEach(r => {
+      if(r.ok){ okc += r.conversations || 0; msgc += r.messages || 0; }
+    });
+    const bad = rs.filter(r => !r.ok);
+    setHint(bad.length
+      ? ('同步完成 ' + okc + ' 个会话；未成功：' + bad.map(b => (b.label||b.platform) + '（' + (b.reason||'') + '）').join('；'))
+      : ('同步完成：' + okc + ' 个会话 / ' + msgc + ' 条消息'));
+    const st = await api('api/platforms');
+    renderPlatforms(st.platforms || []);
+    if(CUR_PLAT !== 'wechat') await switchPlatform(CUR_PLAT);
+  }catch(e){
+    setHint('同步失败：' + esc(String(e)), 9000, true);
+  }finally{
+    if(btn) setTimeout(()=>{ btn.disabled = false; }, 500);
+  }
+}
+
+// 触发平台授权（扫码 / 设备流登录）
+async function loginPlatform(key){
+  const pk = key || (CUR_PLAT === 'wechat' ? '' : CUR_PLAT);
+  if(!pk){
+    setHint('请先在「数据平台」里选择要授权的平台（微信是本地数据，无需授权）');
+    return;
+  }
+  const p = PLAT_LIST.find(x => x.key === pk);
+  const label = (p && p.label) || pk;
+  $('#lgTitle').textContent = label + ' · 授权登录';
+  $('#lgHint').textContent = '正在启动登录流程，请稍候…';
+  $('#lgUrl').innerHTML = '';
+  $('#lgRaw').textContent = '';
+  $('#lgQr').style.display = 'none';
+  $('#lgWrap').classList.add('on');
+  try{
+    const d = await api('api/platform/login?platform=' + encodeURIComponent(pk));
+    if(!d || !d.ok){
+      $('#lgHint').textContent = '登录失败：' + esc((d && d.error) || '未知错误');
+      return;
+    }
+    const hint = d.hint || '请按提示完成授权';
+    $('#lgHint').textContent = hint;
+    if(d.code) $('#lgHint').textContent += '　设备码：' + d.code;
+    if(d.url){
+      $('#lgUrl').innerHTML = '<a href="' + esc(d.url) + '" target="_blank" rel="noopener">' + esc(d.url) + '</a>';
+    }
+    if(d.qrcode){
+      const img = $('#lgQr');
+      // 用相对路径：直连 7890 时是 /api/...，走 /wa/ 反代时自动变成 /wa/api/...
+      // （原来写绝对路径 '/api/...'，反代下会 404，二维码就显示成破图）
+      img.src = 'api/platform/qr?platform=' + encodeURIComponent(pk) + '&t=' + Date.now();
+      img.onerror = function(){
+        this.style.display = 'none';
+        $('#lgHint').textContent = '二维码加载失败，可直接点上面的链接完成授权';
+      };
+      img.style.display = 'block';
+    }
+    if(d.raw) $('#lgRaw').textContent = d.raw;
+    // 登录是异步的：轮询授权状态，成功后自动刷新平台列表
+    let tries = 0;
+    const timer = setInterval(async () => {
+      tries++;
+      try{
+        const st = await api('api/platforms');
+        const cur = (st.platforms || []).find(x => x.key === pk);
+        renderPlatforms(st.platforms || []);
+        if(cur && cur.authorized){
+          clearInterval(timer);
+          $('#lgHint').textContent = '✅ ' + label + ' 授权成功';
+          setTimeout(()=>{ closeLogin(); syncPlatforms(pk); }, 900);
+          return;
+        }
+      }catch(e){}
+      if(tries > 40){ clearInterval(timer); $('#lgHint').textContent = '等待超时：' + hint; }
+    }, 3000);
+  }catch(e){
+    $('#lgHint').textContent = '登录请求失败：' + esc(String(e));
+  }
+}
+
+function closeLogin(){ $('#lgWrap').classList.remove('on'); }
+
+// 提示语：顶栏下方的浮动条，出现几秒自动消失；ms=0 表示只记录不弹（例行状态）
+let HINT_TM = null;
+function setHint(t, ms, isErr){
+  const el = $('#fHint');
+  if(!el) return;
+  el.textContent = t || '';
+  el.title = t || '';
+  el.classList.toggle('err', !!isErr);
+  if(!ms){ el.classList.remove('on'); return; }
+  el.classList.add('on');
+  if(HINT_TM) clearTimeout(HINT_TM);
+  HINT_TM = setTimeout(()=>el.classList.remove('on'), ms);
+}
+
+// 渲染「自动增量刷新」状态：微信开着时源库一直在写，
+// 这个指示器告诉用户大屏确实在实时同步，而不是卡在旧快照上。
+function renderSyncState(ar){
+  const el = $('#fSync');
+  const live = $('#fLive');
+  if(!el) return;
+  // 流水线「统计」节点 + 卡片标签：反映真实的自动同步状态
+  const step = $('#flowLive');
+  const tag = $('#flowTag');
+  if(ar && ar.running){
+    if(tag){
+      tag.textContent = ar.last_error ? '同步异常' : '运行中';
+      tag.style.color = ar.last_error ? '#f87171' : '';
+      tag.style.background = ar.last_error ? 'rgba(248,113,113,.10)' : '';
+      tag.style.borderColor = ar.last_error ? 'rgba(248,113,113,.28)' : '';
+    }
+    if(step){
+      const dot = step.querySelector('.dot');
+      if(dot){
+        dot.classList.toggle('live', !ar.last_error);
+        dot.classList.toggle('idle', !!ar.last_error);
+      }
+      step.classList.toggle('live', !ar.last_error);
+    }
+  }else{
+    if(tag){ tag.textContent = '同步未开启'; tag.style.color = '#f59e0b';
+      tag.style.background='rgba(245,158,11,.10)'; tag.style.borderColor='rgba(245,158,11,.28)'; }
+    if(step){
+      const dot = step.querySelector('.dot');
+      if(dot){ dot.classList.remove('live'); dot.classList.add('idle'); }
+      step.classList.remove('live');
+    }
+  }
+  if(!ar || !ar.running){
+    el.textContent = '自动同步未开启';
+    el.style.color = '#f59e0b';
+    if(live) live.style.opacity = '.45';
+    return;
+  }
+  const secs = ar.last ? Math.max(0, Math.round(Date.now()/1000 - ar.last)) : null;
+  // 顶栏空间有限，同步状态用紧凑写法；完整说明放 title，鼠标悬停可见
+  el.textContent = ar.interval + 's'
+    + (secs !== null ? ' · ' + secs + 's 前' : ' · 等待首轮');
+  el.title = '每 ' + ar.interval + 's 自动同步'
+    + (secs !== null ? ' · ' + secs + 's 前' : ' · 等待首轮');
+  el.style.color = ar.last_error ? '#f87171' : '#5f7392';
+  if(live) live.style.opacity = ar.last_error ? '.45' : '1';
+  if(ar.last_error) el.title = ar.last_error;
+  // 同步详情条
+  const sL = $('#synLast'), sC = $('#synChanged'), sCy = $('#synCycles');
+  if(sL) sL.textContent = secs === null ? '等待首轮' : (secs < 60 ? secs + ' 秒前' : Math.round(secs/60) + ' 分钟前');
+  if(sC){
+    const n = ar.changed || 0;
+    sC.textContent = ar.last_error ? '异常' : (n > 0 ? '+' + n.toLocaleString('zh-CN') : '0');
+    sC.className = ar.last_error ? '' : (n > 0 ? 'good' : '');
+  }
+  if(sCy) sCy.textContent = (ar.cycles || 0).toLocaleString('zh-CN');
+}
+
+// 把「数据链路」时间线每一步右侧的数值填上真实状态。
+// 这一列原本全是空白，现在用实时数据填满，信息密度也上来了。
+function renderFlowValues(d, ar){
+  const set = (id, v) => { const el = $(id); if(el) el.textContent = v; };
+  const acct = d.account || '';
+  // 探测：加密库数量
+  const accs = d.accounts || [];
+  const cur = accs.find(a => a.account === acct) || accs[0];
+  // 账号显示用友好名（昵称 / 短微信号）。
+  // 直接写 d.account 会把数据目录名（<账号>_<随机后缀>）漏到界面上 ——
+  // 那串东西对用户毫无意义，看着像功能坏了。
+  set('#fvAcct', cur ? acctLabel(cur) : '—');
+  set('#fvScan', cur && cur.db_count ? (cur.db_count + ' 个库') : '—');
+  // 解密：密钥/明文状态
+  if(cur){
+    if(cur.key_known && cur.decrypted) set('#fvDec', '已解密');
+    else if(cur.key_known) set('#fvDec', '待解密');
+    else set('#fvDec', '缺密钥');
+  }else set('#fvDec', '—');
+  // 载入：会话数 + 消息数
+  const convs = d.total_conversations || 0;
+  const msgs = d.total_messages || 0;
+  set('#fvLoad', convs ? (fmtN(convs) + ' 会话') : '—');
+  // 统计：刷新节奏
+  if(ar && ar.running){
+    set('#fvStat', '每 ' + ar.interval + 's');
+    set('#kvAuto', '每 ' + ar.interval + ' 秒');
+  }else{
+    set('#fvStat', '未开启');
+    set('#kvAuto', '未开启');
+  }
+}
+
+async function refresh(){
+  try{
+    const d = await api('api/dash');
+    if(d.error){ setHint('接口错误：' + d.error, 9000, true); return false; }
+    LAST_LOADING = !!d.conv_loading;
+    // 各面板独立兜底：任何一块渲染出错都不该拖垮整屏
+    safeCall(() => renderAccounts(d.accounts, d.account));
+    safeCall(() => renderPlatforms(d.platforms || []));
+    // 后端平台探测是异步刷新的，首次 dash 可能拿到空列表。
+    // 这里补拉 /api/platforms（轻量），后台探测可能还没完成，所以重试几次。
+    if(!(d.platforms || []).length && !PLAT_LIST.length){
+      let tries = 0;
+      const timer = setInterval(async () => {
+        tries++;
+        try{
+          const st = await api('api/platforms');
+          if(st && st.platforms && st.platforms.length){
+            clearInterval(timer);
+            PLAT_LIST = st.platforms;
+            renderPlatforms(st.platforms);
+          }
+        }catch(e){}
+        if(tries > 5) clearInterval(timer);
+      }, 2500);
+    }
+    // 热力图/词频是后台异步算的，构建期间显示提示而不是空白面板
+    const building = !!d.stats_building;
+    // 只有在微信视图下才刷新微信侧的统计，避免切到云端平台时被覆盖
+    if(CUR_PLAT === 'wechat'){
+    $('#hVer').textContent = d.version ? (d.version === 4 ? '4.x' : '3.x') : '-';
+    // 重建缓存期间旧数据仍在，照常显示，别闪成 "…" / "统计中"：
+    // 只有真的一个数都没有时才显示占位符。
+    const hasData = d.total_conversations > 0;
+    $('#hConv').textContent = hasData ? fmtN(d.total_conversations) : (d.conv_loading ? '统计中' : '-');
+    $('#hMsg').textContent = d.total_messages ? fmtN(d.total_messages) : (d.conv_loading ? '…' : '-');
+    const dir = d.dir || '未加载';
+    if(dir !== lastDir){
+      lastDir = dir;
+      const hd = $('#hDir');
+      if(hd){ hd.textContent = dir; hd.title = dir; }
+      const as = $('#acctSel');
+      if(as) as.title = '切换要读取的微信账号\n数据目录：' + dir;
+    }
+    safeCall(() => renderConvs(d.top_conversations || []));
+    safeCall(() => renderFeed(d.recent || []));
+    // 高频词条目数（显示在「高频词」标题旁的标签上）
+    safeCall(() => {
+      const el = $('#scWords');
+      if(el) el.textContent = (d.words && d.words.length) ? fmtN(d.words.length) : '—';
+    });
+    if(building && !(d.heatmap || []).length){
+      $('#heat').innerHTML = '<div class="empty loading">正在统计 7×24 小时活跃度（首次要扫全库，约 40 秒）</div>';
+      $('#words').innerHTML = '<div class="empty loading">正在统计高频词…</div>';
+      $('#emojis').innerHTML = '<div class="empty loading">正在统计表情…</div>';
+    }else{
+      safeCall(() => renderHeat(d.heatmap || []));
+      safeCall(() => renderWords(d.words || []));
+      safeCall(() => renderEmojis(d.emojis || []));
+    }
+    } // end if(CUR_PLAT === 'wechat')
+    $('#fTime').textContent = new Date().toLocaleTimeString('zh-CN', {hour12:false});
+    setHint(d.conv_loading ? '后台统计会话中…'
+                        : (building ? '后台统计活跃时段中…' : '数据已就绪'), 0);
+    // 自动增量刷新状态：让用户一眼看到「微信开着 → 大屏真的在同步」
+    safeCall(() => renderSyncState(d.auto_refresh));
+    // 数据链路时间线每步右侧的实时数值
+    safeCall(() => renderFlowValues(d, d.auto_refresh));
+    return LAST_LOADING;
+  }catch(e){
+    // 把真实原因带出来，便于定位（原来只显示固定文案，排查时完全看不到线索）
+    console.error('[dash] refresh failed:', e);
+    setHint('连接分析服务失败：' + esc(String(e && e.message || e)).slice(0, 120), 9000, true);
+    return true;
+  }
+}
+
+// 增量刷新：只重新解密变化的页（密钥早已记住，无需再解密密钥）
+async function doRefresh(){
+  const btn = $('#btnRefresh');
+  const tip = $('#hRefresh');
+  if(!btn) return;
+  btn.disabled = true;
+  tip.textContent = '刷新中…';
+  try{
+    const acct = (LAST_ACCT || '').trim();
+    if(!acct){ tip.textContent = '无账号'; return; }
+    await api('api/refresh?account=' + encodeURIComponent(acct));
+    tip.textContent = '刷新中…';
+    await pollRefresh(acct);
+  }catch(e){
+    tip.textContent = '失败';
+    setHint('刷新失败：' + esc(String(e)), 9000, true);
+  }finally{
+    setTimeout(()=>{ btn.disabled = false; }, 400);
+  }
+}
+
+function hl(text, q){
+  const t = esc(text);
+  if(!q) return t;
+  try{
+    return t.replace(new RegExp('(' + q.replace(/[.*+?^${}()|[\]\\]/g,'\\$&') + ')', 'gi'), '<mark>$1</mark>');
+  }catch(e){ return t; }
+}
+
+let srQ = '';
+async function doSearch(){
+  const q = $('#q').value.trim();
+  if(!q) return;
+  srQ = q;
+  $('#srWrap').classList.add('on');
+  $('#srQ').textContent = '搜索：' + q;
+  $('#srN').textContent = '检索中…';
+  $('#srList').innerHTML = '<div class="empty">正在全库检索，数据量大时需几秒…</div>';
+  try{
+    const d = await api('api/search?q=' + encodeURIComponent(q));
+    const rows = d.results || [];
+    $('#srN').textContent = rows.length + ' 条命中';
+    if(!rows.length){ $('#srList').innerHTML = '<div class="empty">没有匹配的记录</div>'; return; }
+    $('#srList').innerHTML = rows.map(r => `<div class="hit">
+      <div class="hh"><span class="nm">${esc(dispName(r.name) || UNKNOWN_ROOM)}</span><span>${fmtTime(r.time)}</span></div>
+      <div class="tt">${hl(r.content, srQ)}</div></div>`).join('');
+  }catch(e){
+    $('#srN').textContent = '检索失败';
+    $('#srList').innerHTML = '<div class="empty">' + esc(String(e)) + '</div>';
+  }
+}
+// 一键整理：把当前搜索关键词的结果做成 Word 文档下载
+async function doDigest(){
+  const q = $('#q').value.trim();
+  if(!q){ alert('请先输入搜索关键词'); return; }
+  const btn = $('#btnDigest');
+  const old = btn.textContent;
+  btn.disabled = true; btn.textContent = '整理中…';
+  try{
+    const resp = await fetch('api/digest?q=' + encodeURIComponent(q));
+    if(!resp.ok){
+      let msg = '生成失败';
+      try{ const j = await resp.json(); msg = j.error || msg; }catch(_){}
+      alert(msg); return;
+    }
+    const cd = resp.headers.get('Content-Disposition') || '';
+    let fname = '';
+    const m2 = cd.match(/filename\*=UTF-8''([^;]+)/i);
+    if(m2){ try{ fname = decodeURIComponent(m2[1]); }catch(_){ fname = m2[1]; } }
+    if(!fname){ const m = cd.match(/filename="?([^";]+)"?/); if(m) fname = m[1]; }
+    if(!fname) fname = '重要记录_' + q.slice(0,20) + '.docx';
+    const blob = await resp.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = fname; document.body.appendChild(a); a.click();
+    setTimeout(()=>{ URL.revokeObjectURL(url); a.remove(); }, 1500);
+  }catch(e){
+    alert('整理失败：' + e);
+  }finally{
+    btn.disabled = false; btn.textContent = old;
+  }
+}
+function closeSr(){ $('#srWrap').classList.remove('on'); }
+
+// 点遮罩空白处关闭会话弹层
+$('#cvWrap').addEventListener('click', e => {
+  if (e.target && e.target.id === 'cvWrap') closeConv();
+});
+
+// 点遮罩空白处关闭授权弹层
+$('#lgWrap').addEventListener('click', e => {
+  if (e.target && e.target.id === 'lgWrap') closeLogin();
+});
+
+$('#q').addEventListener('keydown', e => { if(e.key === 'Enter') doSearch(); });
+
+// 账号切换
+(function(){
+  const sel = document.getElementById('acctSel');
+  if(!sel) return;
+  sel.addEventListener('change', () => switchAccount(sel.value));
+})();
+
+// 增量刷新按钮
+(function(){
+  const btn = document.getElementById('btnRefresh');
+  if(!btn) return;
+  btn.addEventListener('click', doRefresh);
+})();
+
+// 平台切换 + 平台同步 + 自定义下拉框开关
+(function(){
+  const dd = document.getElementById('platDD');
+  const btn = document.getElementById('platDDBtn');
+  const menu = document.getElementById('platDDMenu');
+  if(dd && btn && menu){
+    btn.addEventListener('click', e => {
+      e.stopPropagation();
+      const open = dd.classList.toggle('open');
+      menu.classList.toggle('on', open);
+      if(open) placeDD();
+    });
+    // 点菜单外面自动收起（菜单本身在 body 下，要单独排除，否则点选项会被立刻收起）
+    document.addEventListener('click', e => {
+      if(menu.contains(e.target)) return;
+      dd.classList.remove('open');
+      menu.classList.remove('on');
+    });
+    dd.addEventListener('click', e => e.stopPropagation());
+    // 窗口尺寸变化时重新定位（否则菜单会停在旧位置）
+    window.addEventListener('resize', () => {
+      if(dd.classList.contains('open')) placeDD();
+    });
+  }
+  const sync = document.getElementById('btnPlatSync');
+  if(sync) sync.addEventListener('click', () => {
+    // 在云端平台视图下只同步当前平台，微信视图下同步全部
+    syncPlatforms(CUR_PLAT === 'wechat' ? '' : CUR_PLAT);
+  });
+  const login = document.getElementById('btnPlatLogin');
+  if(login) login.addEventListener('click', () => loginPlatform());
+})();
+
+// decryptAreaURL：返回链接的目标 —— 「微信解密功能区」
+// （= 分析器首页 index.html 的「① 解密」页签）。
+//
+// 三种入口分别处理（目标页必须是能正常调 API 的那份 index.html）：
+//   · file:// 打开大屏 → 指到 HTTP 版首页。file:// 下的 index.html
+//     相对路径 fetch 会被浏览器直接拒掉，用 file:// 会得到一个
+//     「接口全挂」的空壳页面，比跳错地方更糟。
+//     API_BASE 与大屏用的是同一个服务，所以直接复用它。
+//   · 经 CodeScreen 反代（/wa/*）→ 带上 /wa/ 前缀，反代才认。
+//   · 直连 7890 → 同源 /index.html。
+// 目标页统一带 #decrypt，index.html 会据此激活「① 解密」页签。
+function decryptAreaURL(){
+  if(location.protocol === 'file:'){
+    return (API_BASE || 'http://127.0.0.1:7890') + '/index.html#decrypt';
+  }
+  if(location.pathname.indexOf('/wa/') === 0){
+    return location.origin + '/wa/index.html#decrypt';
+  }
+  return location.origin + '/index.html#decrypt';
+}
+(function(){
+  const a = document.getElementById('backlink');
+  if(!a) return;
+  const target = decryptAreaURL();
+  a.setAttribute('href', target);
+  a.setAttribute('title', '回到微信解密功能区');
+  a.textContent = '← 返回解密';
+  a.addEventListener('click', (e) => {
+    e.preventDefault();
+    location.href = target;
+  });
+})();
+
+// 彻底关闭大屏窗口：只有经 CodeScreen 反代访问时才有这个能力
+(function(){
+  const btn = document.getElementById('btnQuit');
+  if(!btn) return;
+  const viaBoard = location.pathname.indexOf('/wa/') === 0;
+  if(!viaBoard){ btn.disabled = true; btn.title = '直连 7890 时不可用，请经大屏访问'; btn.style.opacity = '.4'; btn.style.cursor = 'default'; return; }
+  btn.addEventListener('click', async () => {
+    try { await fetch(apiUrl('/api/board/close')); } catch(e){}
+  });
+})();
+
+// ── ESC 逐层退出 ──
+// 第 1 层：关掉搜索层
+// 第 2 层：退回 CodeScreen 首页，并留下标记，让首页的 ESC 直接彻底关闭窗口
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Escape') return;
+  e.preventDefault();
+  // 层级：平台授权弹层 > 会话详情弹层 > 搜索层 > 回首页
+  if ($('#lgWrap').classList.contains('on')) { closeLogin(); return; }
+  if ($('#cvWrap').classList.contains('on')) { closeConv(); return; }
+  if ($('#srWrap').classList.contains('on')) { closeSr(); return; }
+  const viaBoard = location.pathname.indexOf('/wa/') === 0;
+  if (viaBoard) {
+    // 30 秒内有效：回到首页后再按 ESC 直接关窗口
+    try { localStorage.setItem('csEscClose', String(Date.now() + 30000)); } catch(err){}
+    location.href = '/';
+    return;
+  }
+  // 直连 / file:// 打开：回解密功能区。
+  // 原来写的是 './'，在 file:// 下会解析成目录索引（一片文件列表），
+  // 跟「返回」按钮犯的是同一个错，这里统一走 decryptAreaURL()。
+  location.href = decryptAreaURL();
+});
+
+// 自适应轮询：统计中/连不上时 2.5 秒重试，就绪后 15 秒刷新
+let _timer = null;
+// URL 参数 ?plat=dingtalk：让大屏可以直接启动在指定平台（钉钉/飞书/企微）。
+// 用途：开机即停在某个平台、或做定时刷新某个平台时直接用这个 URL。
+(function(){
+  let want = '';
+  try{
+    want = (new URLSearchParams(location.search).get('plat') || '').trim();
+  }catch(e){ want = ''; }
+  if(!want || want === 'wechat') return;
+  // 等平台列表探测出来再切（首次 /api/platforms 是异步的）
+  let tries = 0;
+  const t = setInterval(async () => {
+    tries++;
+    if (tries > 40){ clearInterval(t); return; }
+    try{
+      const st = await api('api/platforms?force=1');
+      const list = (st && st.platforms) || [];
+      if(list.length){
+        clearInterval(t);
+        renderPlatforms(list);
+        if(want !== CUR_PLAT) await switchPlatform(want);
+      }
+    }catch(e){ /* 静默重试 */ }
+  }, 2000);
+})();
+// 自动增量刷新：每 3 分钟解一次「变化的页」，让大屏始终显示最新消息
+// （密钥早已记住，这里只重解数据页，秒级完成）
+const AUTO_REFRESH_MS = 180000;
+let _lastAutoRefresh = 0;
+async function loop(){
+  const busy = await refresh();
+  const now = Date.now();
+  if(now - _lastAutoRefresh > AUTO_REFRESH_MS){
+    _lastAutoRefresh = now;
+    autoRefresh();
+  }
+  clearTimeout(_timer);
+  // 空闲时 6s 拉一次（原 15s）：后端 8s 增量同步一次，缩短轮询让新消息更快上屏
+  _timer = setTimeout(loop, busy ? 2500 : 6000);
+}
+
+async function autoRefresh(){
+  const acct = (LAST_ACCT || '').trim();
+  if(!acct) return;
+  try{
+    // 服务端后台异步执行，这里只是「触发 + 稍后看结果」
+    await api('api/refresh?account=' + encodeURIComponent(acct));
+    setTimeout(()=>pollRefresh(acct), 1500);
+  }catch(e){ /* 静默失败，不打扰用户 */ }
+}
+
+async function pollRefresh(acct){
+  try{
+    const st = await api('api/refresh/status?account=' + encodeURIComponent(acct));
+    if(!st) return;
+    if(st.running){ setTimeout(()=>pollRefresh(acct), 3000); return; }
+    const tip = $('#hRefresh');
+    if(tip){
+      if(st.changed){
+        tip.textContent = '+' + st.changed + ' 页 / ' + (st.elapsed||0) + 's';
+        tip.style.color = 'var(--accent)';
+        lastDir = null;               // 触发数据重新加载
+        setTimeout(refresh, 400);
+      }else{
+        tip.textContent = '已是最新';
+        tip.style.color = 'var(--dim2)';
+      }
+    }
+  }catch(e){ /* 静默 */ }
+}
+
+loop();
+</script>
+</body>
+</html>

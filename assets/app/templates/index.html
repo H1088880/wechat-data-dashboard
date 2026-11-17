@@ -1,0 +1,580 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>微信数据分析 · 精简版（只读）</title>
+<!-- 内联 favicon：避免浏览器去请求 /favicon.ico 拿到 404（控制台报错） -->
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='13' fill='%2307c160'/%3E%3C/svg%3E">
+<style>
+  :root{--bg:#f5f7fa;--card:#fff;--line:#e6e9ef;--main:#07c160;--txt:#1f2329;--sub:#8a8f99;--accent:#576b95;}
+  *{box-sizing:border-box}
+  body{margin:0;font-family:-apple-system,"Microsoft YaHei",sans-serif;background:var(--bg);color:var(--txt);font-size:14px}
+  header{background:var(--card);border-bottom:1px solid var(--line);padding:12px 20px;display:flex;align-items:center;gap:14px}
+  header h1{font-size:17px;margin:0;color:var(--main)}
+  header .status{margin-left:auto;color:var(--sub);font-size:12px}
+  nav{display:flex;gap:4px;background:var(--card);border-bottom:1px solid var(--line);padding:0 12px}
+  nav button{background:none;border:none;padding:12px 16px;cursor:pointer;font-size:14px;color:var(--sub);border-bottom:2px solid transparent}
+  nav button.active{color:var(--main);border-bottom-color:var(--main);font-weight:600}
+  main{padding:18px 20px;max-width:1100px;margin:0 auto}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px;margin-bottom:16px}
+  .card h2{margin:0 0 12px;font-size:15px}
+  .row{display:flex;gap:12px;flex-wrap:wrap;align-items:center}
+  input,select,textarea{padding:8px 10px;border:1px solid var(--line);border-radius:8px;font-size:13px;font-family:inherit}
+  input[type=text]{min-width:240px}
+  button.act{background:var(--main);color:#fff;border:none;padding:8px 16px;border-radius:8px;cursor:pointer;font-size:13px}
+  button.act:hover{opacity:.92}
+  button.ghost{background:#fff;border:1px solid var(--line);padding:7px 14px;border-radius:8px;cursor:pointer}
+  .muted{color:var(--sub);font-size:12px}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line)}
+  th{color:var(--sub);font-weight:600}
+  .me{color:var(--main)} .them{color:var(--txt)}
+  .list{list-style:none;margin:0;padding:0;max-height:520px;overflow:auto}
+  .list li{padding:9px 10px;border-bottom:1px solid var(--line);cursor:pointer;display:flex;justify-content:space-between;gap:8px}
+  .list li:hover{background:#f0faf4}
+  .list li.sel{background:#e6f7ee;font-weight:600}
+  .bubble{max-width:72%;padding:8px 12px;border-radius:10px;margin:6px 0;word-break:break-all}
+  .bubble.me{background:var(--main);color:#fff;margin-left:auto}
+  .bubble.them{background:#eef0f3;color:var(--txt)}
+  /* 消息行：发送者昵称 + 时间 + 气泡 */
+  .msgrow{display:flex;flex-direction:column;align-items:flex-start;margin:10px 0}
+  .msgrow.me{align-items:flex-end}
+  .msghead{display:flex;align-items:baseline;gap:8px;margin:0 2px 3px;line-height:1}
+  .msghead .mwho{font-size:11.5px;color:var(--dim);font-weight:600}
+  .msgrow.me .msghead .mwho{color:var(--main);opacity:.85}
+  .msghead .mtime{font-size:10.5px;color:var(--muted,#9aa3b0);font-family:var(--mono)}
+  .msgrow .bubble{margin:0}
+  .ghost:disabled{opacity:.42;cursor:not-allowed}
+  .chat{padding:10px 14px}
+  .heat{display:grid;grid-template-columns:40px repeat(24,1fr);gap:2px;font-size:10px}
+  .heat .h{background:#eef0f3;text-align:center;padding:2px 0}
+  .heat .cell{height:16px;border-radius:2px}
+  .bar{display:flex;align-items:flex-end;gap:4px;height:140px}
+  .bar .b{flex:1;background:var(--main);border-radius:3px 3px 0 0;position:relative}
+  .bar .b span{position:absolute;bottom:-16px;left:0;right:0;text-align:center;font-size:10px;color:var(--sub)}
+  .cloud span{display:inline-block;margin:3px 6px;vertical-align:middle;color:var(--accent)}
+  .stat{display:flex;gap:14px;flex-wrap:wrap}
+  .stat .s{background:#f0faf4;border:1px solid #cdeedd;border-radius:10px;padding:12px 16px;min-width:120px}
+  .stat .s b{display:block;font-size:22px;color:var(--main)}
+  .stat .s small{color:var(--sub)}
+  .tag{display:inline-block;background:#eef0f3;border-radius:6px;padding:2px 8px;margin:3px;font-size:12px}
+  .hint{background:#fff8e6;border:1px solid #ffe2a8;color:#8a6d1a;padding:10px 12px;border-radius:8px;font-size:12px;margin-bottom:12px}
+  .ok{color:var(--main)} .err{color:#e54545}
+  pre{white-space:pre-wrap;word-break:break-all;background:#f7f8fa;padding:10px;border-radius:8px;max-height:200px;overflow:auto;font-size:12px}
+  .hidden{display:none}
+  /* 页脚署名：低调灰绿，不干扰操作 */
+  .site-foot{margin:26px 0 8px;text-align:center;color:#9aa1ad;font-size:12px;letter-spacing:.4px}
+  .site-foot b{color:var(--main);font-weight:700}
+</style>
+</head>
+<body>
+<header>
+  <h1>微信数据分析 · 精简版</h1>
+  <span class="muted">只读 · 不连微信 · 不发消息</span>
+  <button class="ghost" id="bigBtn" onclick="openBigScreen()">📺 大屏</button>
+  <span class="status" id="status">数据目录：未加载</span>
+</header>
+<nav id="nav">
+  <button data-tab="decrypt" class="active">① 解密</button>
+  <button data-tab="browse">② 浏览</button>
+  <button data-tab="search">③ 搜索</button>
+  <button data-tab="fav">④ 朋友圈/收藏</button>
+  <button data-tab="annual">⑤ 年度总结</button>
+  <button data-tab="export">⑥ 导出</button>
+</nav>
+<main>
+  <!-- 解密 -->
+  <section id="tab-decrypt">
+    <div class="hint">全程只读分析「你自己的」微信本地数据：不连微信、不发消息、不修改任何文件。解密后的库写入 <code>decrypted/</code> 目录，仅供本工具读取。</div>
+    <div class="card">
+      <h2>方式一：一键自动解密（推荐 · 闭环）</h2>
+      <p class="muted">自动探测本机微信加密数据库 → 用你提供的密钥（或尽力从运行中的微信进程提取）→ 解密 → 加载。把密钥写进 <code>config.json</code> 或加 <code>--key</code> 启动即可完全免手动。</p>
+      <div class="row">
+        <input type="text" id="autoKey" placeholder="64位十六进制密钥（32字节）；微信每次重新登录都会换密钥" style="min-width:420px">
+        <button class="act" onclick="autoDecrypt()">⚡ 一键探测 + 解密 + 加载</button>
+        <button class="ghost" onclick="tryExtractKey()">🔑 从微信进程提取</button>
+        <span id="autoResult" class="muted"></span>
+      </div>
+    </div>
+    <div class="card">
+      <h2>方式二：手动指定目录 + 密钥</h2>
+      <div class="row">
+        <select id="dirSel"><option value="">— 选择检测到的本机微信加密目录 —</option></select>
+        <button class="ghost" onclick="detectDirs()">重新检测</button>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <input type="text" id="keyInput" placeholder="64位十六进制密钥，例如 a1b2...（32字节）" style="min-width:380px">
+        <button class="act" onclick="doDecrypt()">解密并加载</button>
+      </div>
+      <div id="decryptResult" class="muted" style="margin-top:10px"></div>
+    </div>
+    <div class="card">
+      <h2>方式三：先看效果（示例数据）</h2>
+      <p class="muted">本机未登录微信时可用，生成一份仿微信结构的示例库演示全部功能。</p>
+      <button class="act" onclick="loadSample()">生成并加载示例数据</button>
+    </div>
+  </section>
+
+  <!-- 浏览 -->
+  <section id="tab-browse" class="hidden">
+    <div class="card">
+      <div class="row" style="justify-content:space-between">
+        <h2 style="margin:0">聊天记录浏览</h2>
+        <button class="ghost" onclick="loadConversations();loadMessages()">↻ 刷新（同步新增）</button>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <input type="text" id="browseFilter" placeholder="筛选会话名/ID" oninput="loadConversations()">
+      </div>
+    </div>
+    <div class="card" style="display:flex;gap:16px">
+      <ul class="list" id="convList" style="flex:0 0 300px"></ul>
+      <div style="flex:1;min-width:0">
+        <div id="chatHead" class="muted" style="margin-bottom:8px"></div>
+        <div id="chatBox" class="chat" style="max-height:520px;overflow:auto;background:#fafbfc;border-radius:8px"></div>
+        <div class="row" style="margin-top:10px">
+          <button class="ghost" id="btnPrev" onclick="prevPage()">上一页</button>
+          <span id="pageInfo" class="muted"></span>
+          <button class="ghost" id="btnNext" onclick="nextPage()">下一页</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 搜索 -->
+  <section id="tab-search" class="hidden">
+    <div class="card">
+      <h2>聊天记录全文搜索</h2>
+      <div class="row">
+        <input type="text" id="searchBox" placeholder="输入关键词，例如：红包、方案、周五" onkeydown="if(event.key==='Enter')doSearch()">
+        <select id="searchTalker"><option value="">全部会话</option></select>
+        <button class="act" onclick="doSearch()">搜索</button>
+      </div>
+      <div id="searchResult" style="margin-top:12px"></div>
+    </div>
+  </section>
+
+  <!-- 朋友圈/收藏 -->
+  <section id="tab-fav" class="hidden">
+    <div class="card">
+      <h2>收藏</h2>
+      <ul class="list" id="favList"></ul>
+    </div>
+    <div class="card">
+      <h2>朋友圈（本地）</h2>
+      <p class="muted">微信本地通常只保留你自己发的朋友圈与互动，以下为本地可读取内容。</p>
+      <ul class="list" id="momentsList"></ul>
+    </div>
+  </section>
+
+  <!-- 年度总结 -->
+  <section id="tab-annual" class="hidden">
+    <div class="card">
+      <div class="row" style="justify-content:space-between">
+        <h2 style="margin:0">年度总结</h2>
+        <div class="row">
+          <select id="yearSel"></select>
+          <button class="act" onclick="loadAnnual()">生成</button>
+        </div>
+      </div>
+      <div id="annualBox"></div>
+    </div>
+  </section>
+
+  <!-- 导出 -->
+  <section id="tab-export" class="hidden">
+    <div class="card">
+      <h2>导出</h2>
+      <p class="muted">支持 HTML / JSON / TXT / CSV(Excel) / XLSX / Zip。可选择导出某个会话或全部。</p>
+      <div class="row">
+        <select id="expTalker"><option value="">全部会话</option></select>
+        <select id="expYear">
+          <option value="">（可选）限定年份</option>
+          <option value="2024">2024</option><option value="2023">2023</option>
+          <option value="2025">2025</option>
+        </select>
+        <button class="act" onclick="doExport('html')">HTML</button>
+        <button class="act" onclick="doExport('json')">JSON</button>
+        <button class="act" onclick="doExport('txt')">TXT</button>
+        <button class="act" onclick="doExport('csv')">CSV</button>
+        <button class="act" onclick="doExport('xlsx')">Excel</button>
+        <button class="act" onclick="doExport('zip')">Zip包</button>
+      </div>
+      <div id="exportMsg" class="muted" style="margin-top:10px"></div>
+    </div>
+  </section>
+</main>
+<footer class="site-foot">微信数据分析 · 署名 <b>云帆-H1088880</b></footer>
+
+<script>
+const $=s=>document.querySelector(s);
+let curTalker="", curPage=0, curYear=2024;
+// 会话名缓存：talker -> 名称。loadMessages 用它，不再每次请求会话列表接口
+let CONV_NAME={};
+
+// 标签页切换
+document.querySelectorAll('#nav button').forEach(b=>{
+  b.onclick=()=>{
+    document.querySelectorAll('#nav button').forEach(x=>x.classList.remove('active'));
+    b.classList.add('active');
+    document.querySelectorAll('main section').forEach(s=>s.classList.add('hidden'));
+    $('#tab-'+b.dataset.tab).classList.remove('hidden');
+    if(b.dataset.tab==='browse'){loadConversations();loadMessages();}
+    if(b.dataset.tab==='search')fillTalkerOptions();
+    if(b.dataset.tab==='fav')loadFav();
+    if(b.dataset.tab==='annual'){initYears();loadAnnual();}
+    if(b.dataset.tab==='export'){fillTalkerOptions();fillExpTalker();}
+    // 记住当前页签到 hash：刷新 / 从别处跳回来都还在同一页
+    try{history.replaceState(null,'','#'+b.dataset.tab);}catch(e){}
+  };
+});
+
+// 支持用 #页签名 直接定位（如 index.html#decrypt → ① 解密）。
+// 大屏的「返回解密」按钮就靠这个跳回解密功能区。
+(function(){
+  const h=(location.hash||'').replace(/^#/,'').trim();
+  if(!h) return;
+  const btn=document.querySelector('#nav button[data-tab="'+h+'"]');
+  if(btn) btn.click();
+})();
+
+// API 基址：file:// 直接打开时，相对路径 fetch 会被浏览器拒掉
+// （"Cross origin requests are only supported for protocol schemes: http, https"），
+// 前端只看到 "Failed to fetch"，完全不知道真实原因。
+// 这里和大屏用同一套规则：http(s) 同源直接用相对路径；file:// 走绝对地址。
+const API_BASE = (() => {
+  try {
+    const q = new URLSearchParams(location.search).get('api');
+    if (q) return q.replace(/\/+$/, '');
+    if (location.protocol === 'file:') {
+      const saved = localStorage.getItem('wb_api_base');
+      if (saved) return saved.replace(/\/+$/, '');
+      return 'http://127.0.0.1:7890';
+    }
+  } catch (e) {
+    if (location.protocol === 'file:') return 'http://127.0.0.1:7890';
+  }
+  return '';
+})();
+
+// 'api/xxx' 或 '/api/xxx' → 可直接 fetch 的地址
+function apiUrl(p){
+  if (!p) return p;
+  if (/^https?:\/\//i.test(p)) return p;
+  if (API_BASE) return API_BASE + '/' + String(p).replace(/^\/+/, '');
+  return p;
+}
+
+async function api(p){const r=await fetch(apiUrl(p));if(!r.ok)return {};return r.json();}
+async function refreshStatus(){
+  try{const s=await api('/api/status');
+    let txt='数据目录：'+(s.dir?shortDir(s.dir):'未加载');
+    if(s.version)txt+=` · 微信${s.version}.x`;
+    if(s.conv_count!=null)txt+=` · ${s.conv_count}会话`;
+    $('#status').textContent=txt+(s.has_msg?' ✓':'');}catch(e){}
+}
+function shortDir(d){const p=String(d).split(/[\\/]/);return '…'+p.slice(-2).join('/');}
+
+// ① 解密
+async function detectDirs(){
+  const d=await api('/api/detect');
+  const sel=$('#dirSel');sel.innerHTML='<option value="">— 选择检测到的微信数据目录 —</option>';
+  (d.encrypted||[]).forEach(x=>{const o=document.createElement('option');o.value=x.msg_dir;
+    o.textContent=`${x.account}  (${x.db_count}个库) → ${x.msg_dir}`;sel.appendChild(o);});
+  if(!(d.encrypted||[]).length)$('#decryptResult').innerHTML='<span class="muted">未检测到本机微信数据目录。请确认微信已登录，或在「浏览」页用「加载示例数据」体验。</span>';
+}
+async function loadSample(){
+  const r=await api('/api/sample');refreshStatus();
+  $('#decryptResult').innerHTML='<span class="ok">已生成示例数据并加载，去「浏览/搜索/年度总结」体验吧。</span>';
+}
+async function tryExtractKey(){
+  $('#autoResult').innerHTML='<span class="muted">正在读取微信进程内存尝试提取密钥（最多 30 秒）…</span>';
+  const d=await api('/api/key-extract');
+  if(d.ok && d.key){
+    $('#autoKey').value=d.key;
+    $('#autoResult').innerHTML='<span class="ok">✓ 已提取到密钥，已填入输入框，点左边按钮即可解密。</span>';
+  }else{
+    $('#autoResult').innerHTML='<span class="err">未能自动提取（微信版本/权限限制）。请手动填入密钥。</span>'
+      +'<div class="muted" style="margin-top:6px">可用你已有的解密工具读一次当前密钥，粘到上面输入框。</div>';
+  }
+}
+async function pollDecrypt(box){
+  for(let i=0;i<3600;i++){
+    const p=await api('/api/decrypt-progress');
+    if(!p.running) return p;
+    const pct=p.total?Math.round(p.done/p.total*100):0;
+    $(box).innerHTML=`<span class="muted">解密中 ${p.done}/${p.total}（${pct}%）`;
+    if(p.current)$(box).innerHTML+=` · ${p.current}`;
+    if(p.elapsed)$(box).innerHTML+=` · 已用 ${p.elapsed}s`;
+    $(box).innerHTML+='</span>';
+    await new Promise(r=>setTimeout(r,1000));
+  }
+  return {error:'超时'};
+}
+async function autoDecrypt(){
+  const key=$('#autoKey').value.trim();
+  $('#autoResult').textContent='探测中…';
+  const url='/api/auto'+(key?'?key='+encodeURIComponent(key):'');
+  const d=await api(url);
+  if(d.started){
+    const p=await pollDecrypt('#autoResult');
+    refreshStatus();
+    if(p.error){
+      $('#autoResult').innerHTML=`<span class="err">解密失败：${p.error}</span>`;
+    }else{
+      $('#autoResult').innerHTML=`<span class="ok">✓ 解密完成：${p.ok}/${p.total} 个库，已加载</span>`;
+      refreshStatus(); loadConversations();
+    }
+  }else if(d.needs_key){
+    $('#autoResult').innerHTML=`<span class="err">已找到加密数据库（${d.db_count||'?'} 个：${(d.msg_dir||'').split(/[\\/]/).slice(-2).join('/')}），但需要密钥。</span>`
+      +'<div class="muted" style="margin-top:6px">密钥是 32 字节（64 位十六进制）。微信每次重新登录都会更换密钥，'
+      +'所以要用「当前这次登录」的密钥：可从你已有的解密工具里读一次，或点「🔑 从微信进程提取」试试。</div>';
+  }else if(d.busy){
+    $('#autoResult').innerHTML='<span class="err">已有解密任务在进行中。</span>';
+  }else{
+    $('#autoResult').innerHTML=`<span class="err">${d.reason||d.error||'自动探测失败'}</span>`;
+  }
+}
+async function doDecrypt(){
+  const msg_dir=$('#dirSel').value, key=$('#keyInput').value.trim();
+  if(!msg_dir||!key){$('#decryptResult').innerHTML='<span class="err">请先选择数据目录并填写密钥。</span>';return;}
+  const r=await fetch(apiUrl('/api/decrypt'),{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({msg_dir,key})});
+  const j=await r.json();
+  if(j.error){$('#decryptResult').innerHTML=`<span class="err">${j.error}</span>`;return;}
+  const p=await pollDecrypt('#decryptResult');
+  if(p.error){ $('#decryptResult').innerHTML=`<span class="err">解密失败：${p.error}</span>`; return; }
+  $('#decryptResult').innerHTML=`<span class="ok">解密完成：${p.ok}/${p.total} 个库成功，已加载</span>`;
+  refreshStatus(); loadConversations();
+}
+async function openBigScreen(){
+  const cfg=await api('/api/config');
+  const base=((cfg&&cfg.bigscreen)||'').replace(/\/+$/,'');
+  // 入口 URL 必须跟当前页面的访问方式一致，否则会 404：
+  //  · 经 CodeScreen 反代(/wa/)打开 → 大屏也走反代，保持 PIN 保护与窗口控制
+  //  · 直连 7890 打开             → 走 /bigscreen.html
+  // （之前无论哪种都硬拼 /wa/bigscreen.html，而 7890 自身没有 /wa/ 路由，
+  //   点进去就是 {"error":"not found"}）
+  const via = location.pathname.indexOf('/wa/') === 0;
+  let url;
+  if(via){
+    url = location.origin + '/wa/bigscreen.html';
+  }else if(location.protocol === 'file:'){
+    // file:// 下相对路径会解析成 file:///bigscreen.html（不存在），
+    // 走 API_BASE 的绝对地址。
+    url = API_BASE + '/bigscreen.html';
+  }else if(base && base.indexOf(location.origin) !== 0){
+    url = base + '/bigscreen.html';   // 配置指向别处（隧道/局域网）时按配置走
+  }else{
+    url = '/bigscreen.html';
+  }
+  window.open(url,'_blank');
+}
+
+// ② 浏览
+// silent=true：后台轮询时调用。只在内容真正变化时才重绘，
+// 避免每 15 秒闪一次、也避免把用户正在选中的高亮和滚动位置冲掉。
+async function loadConversations(retry,silent){
+  const f=$('#browseFilter').value.trim();
+  const d=await api('/api/conversations');
+  if(d.loading){
+    if(!silent)$('#convList').innerHTML='<li class="muted">会话列表统计中（数据量较大时首次需几秒）…</li>';
+    if(!retry)setTimeout(()=>loadConversations(true),1500);
+    return;
+  }
+  let list=d.conversations||[];
+  // 记下会话名映射：loadMessages 直接查它，避免每次翻页都请求 /api/conversations
+  CONV_NAME={};list.forEach(c=>{CONV_NAME[c.talker]=c.name||c.talker;});
+  if(f)list=list.filter(c=>(c.name+c.talker).toLowerCase().includes(f.toLowerCase()));
+  const ul=$('#convList');
+  // 内容没变就不重绘（保持滚动位置与选中态）
+  const sig=list.map(c=>c.talker+'#'+c.count).join('|')+'#'+curTalker;
+  if(silent&&ul.dataset.sig===sig)return;
+  ul.dataset.sig=sig;
+  const keepTop=ul.scrollTop;
+  ul.innerHTML='';
+  list.forEach(c=>{const li=document.createElement('li');
+    li.innerHTML=`<span>${esc(c.name)}</span><span class="muted">${c.count}条</span>`;
+    li.onclick=()=>{curTalker=c.talker;curPage=0;
+      document.querySelectorAll('#convList li').forEach(x=>x.classList.remove('sel'));
+      li.classList.add('sel');loadMessages();};
+    ul.appendChild(li);});
+  if(!list.length)ul.innerHTML='<li class="muted">暂无会话（请先在「①解密」加载数据）</li>';
+  const hadTalker=!!curTalker;
+  if(list.length&&!curTalker){curTalker=list[0].talker;ul.firstChild.classList.add('sel');}
+  // 重绘后把选中态补回来（静默更新时不能让高亮消失）
+  else if(curTalker){
+    const idx=list.findIndex(c=>c.talker===curTalker);
+    if(idx>=0&&ul.children[idx])ul.children[idx].classList.add('sel');
+  }
+  ul.scrollTop=keepTop;
+  // 首次选中会话时把消息区填上。
+  // 之前这里缺了这一步：切到「浏览」页签时 loadConversations 和 loadMessages
+  // 是并发的，loadMessages 在 curTalker 赋值前就跑完了（直接 return），
+  // 表现为会话列表有了但右侧消息区一片空白。
+  if(curTalker&&!hadTalker&&!silent)loadMessages();
+}
+async function loadMessages(silent){
+  if(!curTalker)return;
+  // 会话名从缓存里取，不要每次都打 /api/conversations：
+  // 那个接口在缓存重建时返回 {loading:true}，取 .conversations.find()
+  // 会直接抛异常，导致翻页「点了没反应」。
+  const name=(CONV_NAME[curTalker])||curTalker;
+  const d=await api(`/api/messages?talker=${encodeURIComponent(curTalker)}&page=${curPage}`);
+  $('#chatHead').textContent=`${name} · 共 ${d.count} 条 · 第 ${curPage+1} 页`;
+  const box=$('#chatBox');
+  // 静默刷新：内容没变就不重绘，否则用户看消息时会被清空重画
+  const sig=(d.messages||[]).map(m=>m.time+'|'+m.content+'|'+(m.sender_name||m.sender||'')).join('§');
+  if(silent&&box.dataset.sig===sig)return;
+  box.dataset.sig=sig;
+  const keepTop=box.scrollTop;
+  box.innerHTML='';
+  // 倒序展示最新在下；显示发送者昵称 + 时间
+  (d.messages||[]).forEach(m=>{
+    const wrap=document.createElement('div');
+    wrap.className='msgrow'+(m.isSend?' me':' them');
+    const who=m.isSend?'我':(m.sender_name||m.sender||'未知');
+    const head=document.createElement('div');
+    head.className='msghead';
+    const n=document.createElement('span'); n.className='mwho'; n.textContent=who;
+    const t=document.createElement('span'); t.className='mtime';
+    t.textContent=m.time?new Date(m.time*1000).toLocaleString('zh-CN',{hour12:false}).slice(5,16):'';
+    head.appendChild(n); head.appendChild(t);
+    const div=document.createElement('div');
+    div.className='bubble '+(m.isSend?'me':'them');
+    div.textContent=m.content;
+    wrap.appendChild(head); wrap.appendChild(div);
+    box.appendChild(wrap);
+  });
+  // 静默刷新时保持原滚动位置；手动刷新才滚到底部
+  box.scrollTop=silent?keepTop:box.scrollHeight;
+  // 总页数：按**原始条数**算，不是过滤后的条数
+  const totalPages=Math.max(1,Math.ceil((d.count||0)/80));
+  $('#pageInfo').textContent=`共 ${totalPages} 页`;
+  // 翻页按钮的可用状态
+  const pv=document.getElementById('btnPrev'), nx=document.getElementById('btnNext');
+  if(pv)pv.disabled=(curPage<=0);
+  if(nx)nx.disabled=(curPage>=totalPages-1);
+}
+function nextPage(){if(curPage<1e9){curPage++;loadMessages();}}
+function prevPage(){if(curPage>0){curPage--;loadMessages();}}
+
+// 实时轮询：会话列表 + 当前会话的消息，每 15 秒静默刷新一次。
+// 只在「浏览」标签页生效，不打断其它页签的操作。
+let _pollBusy=false;
+async function pollLive(){
+  if(_pollBusy)return;
+  const tab=document.querySelector('.tab.active');
+  if(!tab||tab.dataset.tab!=='browse')return;
+  // 搜索框正在输入时不动会话列表
+  const el=document.activeElement;
+  if(el&&(el.id==='browseFilter'||el.id==='q'))return;
+  _pollBusy=true;
+  try{
+    await loadConversations(false,true);
+    // 只在第 1 页（最新消息）时自动刷新消息区
+    if(curTalker&&curPage===0)await loadMessages(true);
+  }catch(e){}
+  _pollBusy=false;
+}
+setInterval(pollLive,15000);
+
+// ③ 搜索
+async function fillTalkerOptions(){
+  const d=await api('/api/conversations');
+  const sel=$('#searchTalker');sel.innerHTML='<option value="">全部会话</option>';
+  d.conversations.forEach(c=>{const o=document.createElement('option');o.value=c.talker;o.textContent=c.name;sel.appendChild(o);});
+}
+async function doSearch(){
+  const q=$('#searchBox').value.trim();if(!q)return;
+  const tk=$('#searchTalker').value;
+  const d=await api(`/api/search?q=${encodeURIComponent(q)}&talker=${encodeURIComponent(tk)}`);
+  const box=$('#searchResult');
+  if(!d.results.length){box.innerHTML='<p class="muted">没有匹配结果。</p>';return;}
+  box.innerHTML=`<p class="muted">找到 ${d.results.length} 条</p>`;
+  d.results.forEach(r=>{const div=document.createElement('div');div.className='card';div.style.margin='8px 0';
+    div.innerHTML=`<div class="muted">${esc(r.name)} · ${ts(r.time)} · ${r.isSend?'我':'对方'}</div><div>${esc(r.content)}</div>`;
+    box.appendChild(div);});
+}
+
+// ④ 朋友圈/收藏
+async function loadFav(){
+  const f=await api('/api/favorites');const ul=$('#favList');ul.innerHTML='';
+  if(!f.favorites.length)ul.innerHTML='<li class="muted">无收藏数据</li>';
+  f.favorites.forEach(x=>{const li=document.createElement('li');
+    li.innerHTML=`<span>${esc(x.title||'(无标题)')}</span><span class="muted">${x.type} · ${ts(x.time)}</span>`;ul.appendChild(li);});
+  const m=await api('/api/moments');const ul2=$('#momentsList');ul2.innerHTML='';
+  if(!m.moments.length)ul2.innerHTML='<li class="muted">本地无朋友圈数据</li>';
+  m.moments.forEach(x=>{const li=document.createElement('li');
+    li.innerHTML=`<span>${esc(x.content)}</span><span class="muted">${ts(x.time)}</span>`;ul2.appendChild(li);});
+}
+
+// ⑤ 年度总结
+function initYears(){const sel=$('#yearSel');const y=new Date().getFullYear();
+  sel.innerHTML='';for(let i=y;i>=y-5;i--){const o=document.createElement('option');o.value=i;o.textContent=i+'年';sel.appendChild(o);}sel.value=y;}
+async function loadAnnual(){
+  curYear=+$('#yearSel').value;
+  const d=await api(`/api/annual?year=${curYear}`);const box=$('#annualBox');
+  if(d.empty){box.innerHTML='<p class="muted">该年份没有聊天数据。</p>';return;}
+  let h='<div class="stat">';
+  h+=stat(d.total,'消息总数');h+=stat(d.active_days,'活跃天数');
+  h+=stat(d.sent,'我发出');h+=stat(d.recv,'我收到');
+  h+=stat(d.busiest_count,'最忙一天('+d.busiest_day+')');
+  h+='</div>';
+  // 月度柱状
+  h+='<div class="card"><h2>月度消息量</h2>'+bar(d.monthly,['1月','2月','3月','4月','5月','6月','7月','8月','9月','10月','11月','12月'])+'</div>';
+  // 时间热力
+  h+='<div class="card"><h2>星期×时段 活跃热力</h2>'+heatmap(d.heatmap)+'</div>';
+  // Top 联系人
+  h+='<div class="card"><h2>最活跃 TOP 联系人</h2><div>'+d.top_talkers.map(t=>`<span class="tag">${esc(t.name)} ${t.count}</span>`).join('')+'</div></div>';
+  // 词云
+  h+='<div class="card"><h2>高频词</h2><div class="cloud">'+d.words.map(w=>`<span style="font-size:${12+Math.min(w.c,80)/4}px">${esc(w.w)}</span>`).join('')+'</div>';
+  h+='<h2 style="margin-top:10px">高频表情</h2><div class="cloud">'+d.emojis.map(e=>`<span style="font-size:${16+Math.min(e.c,60)/3}px">${esc(e.e)}</span>`).join('')+'</div></div>';
+  box.innerHTML=h;
+}
+
+// ⑥ 导出
+async function fillExpTalker(){const d=await api('/api/conversations');
+  const sel=$('#expTalker');sel.innerHTML='<option value="">全部会话</option>';
+  d.conversations.forEach(c=>{const o=document.createElement('option');o.value=c.talker;o.textContent=c.name;sel.appendChild(o);});}
+function doExport(fmt){
+  const tk=encodeURIComponent($('#expTalker').value||'');
+  const yr=$('#expYear').value;
+  let url=`api/export?format=${fmt}&talker=${tk}`+(yr?`&year=${yr}`:'');
+  $('#exportMsg').textContent='导出中…';
+  // 触发下载
+  fetch(apiUrl(url)).then(r=>{if(!r.ok)return r.json().then(j=>Promise.reject(j));
+    return r.blob();}).then(b=>{const a=document.createElement('a');
+    a.href=URL.createObjectURL(b);a.download=fmt+'.'+fmt;a.click();
+    $('#exportMsg').innerHTML='<span class="ok">已导出 '+fmt+'</span>';})
+    .catch(e=>{$('#exportMsg').innerHTML='<span class="err">'+(e.error||'导出失败')+'</span>';});
+}
+
+// 工具
+function esc(s){return String(s==null?'':s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
+function ts(t){if(!t)return'';const d=new Date(t*1000);return d.toLocaleString('zh-CN');}
+function stat(n,l){return `<div class="s"><b>${n}</b><small>${l}</small></div>`;}
+function bar(vals,labels){
+  const max=Math.max(1,...vals);
+  return '<div class="bar">'+vals.map((v,i)=>`<div class="b" style="height:${v/max*120}px" title="${labels[i]}: ${v}"><span>${labels[i].replace('月','')}</span></div>`).join('')+'</div>';
+}
+const WD=['一','二','三','四','五','六','日'];
+function heatmap(m){
+  const flat=[].concat(...m);const max=Math.max(1,...flat);
+  let h='<div class="heat"><div></div>'+Array.from({length:24},(_,i)=>`<div class="h">${i}</div>`).join('')+'</div>';
+  for(let r=0;r<7;r++){
+    h+=`<div class="heat"><div class="h">${WD[r]}</div>`;
+    for(let c=0;c<24;c++){
+      const v=m[r][c];const a=0.08+v/max*0.92;
+      h+=`<div class="cell" style="background:rgba(7,193,96,${a})" title="${WD[r]} ${c}时: ${v}"></div>`;
+    }
+    h+='</div>';
+  }
+  return h;
+}
+
+// 启动
+detectDirs();refreshStatus();
+</script>
+</body>
+</html>
