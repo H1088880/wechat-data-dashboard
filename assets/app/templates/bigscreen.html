@@ -1006,6 +1006,11 @@ let lastDir = null;
 let LAST_LOADING = false;
 let LAST_ACCT = '';
 let ACCT_LIST = [];
+// 服务端是否已开启「自动增量同步」守护线程（/api/dash 里的 auto_refresh.running）。
+// 开着的话浏览器端就**不再自己触发刷新**：一个进程只留一套同步节奏。
+// 否则大屏窗口 + 浏览器标签同时开着 = 两个客户端各自触发刷新，
+// 互相抢 SQLite 文件锁，两边一起显示「同步异常」。
+let SRV_SYNC = false;
 
 // ── 会话详情弹层 ──────────────────────────────────────────────────────────
 let CONV_STATE = { talker: '', page: 0, done: false, loading: false, total: 0 };
@@ -1570,6 +1575,7 @@ async function refresh(){
     setHint(d.conv_loading ? '后台统计会话中…'
                         : (building ? '后台统计活跃时段中…' : '数据已就绪'), 0);
     // 自动增量刷新状态：让用户一眼看到「微信开着 → 大屏真的在同步」
+    SRV_SYNC = !!(d.auto_refresh && d.auto_refresh.running);
     safeCall(() => renderSyncState(d.auto_refresh));
     // 数据链路时间线每步右侧的实时数值
     safeCall(() => renderFlowValues(d, d.auto_refresh));
@@ -1736,14 +1742,22 @@ $('#q').addEventListener('keydown', e => { if(e.key === 'Enter') doSearch(); });
 //   · 经 CodeScreen 反代（/wa/*）→ 带上 /wa/ 前缀，反代才认。
 //   · 直连 7890 → 同源 /index.html。
 // 目标页统一带 #decrypt，index.html 会据此激活「① 解密」页签。
+function isAppWindow(){
+  // launch_big 拉起 --app 窗口时会在地址上带 appwin=1（见 launch_big.add_appwin）
+  try{ return new URLSearchParams(location.search).get('appwin') === '1'; }catch(e){ return false; }
+}
 function decryptAreaURL(){
+  // 在 --app 大屏窗口里，这个标记要跟着一起带回首页：首页据此知道
+  // 「点 📺 大屏 应该在本窗口跳回去」，而不是 window.open 开一个浏览器标签页
+  // （开成标签页后大屏窗口就"消失"了 —— 它没标题栏、任务栏也没图标）。
+  const q = isAppWindow() ? '?appwin=1' : '';
   if(location.protocol === 'file:'){
-    return (API_BASE || 'http://127.0.0.1:7890') + '/index.html#decrypt';
+    return (API_BASE || 'http://127.0.0.1:7890') + '/index.html' + q + '#decrypt';
   }
   if(location.pathname.indexOf('/wa/') === 0){
-    return location.origin + '/wa/index.html#decrypt';
+    return location.origin + '/wa/index.html' + q + '#decrypt';
   }
-  return location.origin + '/index.html#decrypt';
+  return location.origin + '/index.html' + q + '#decrypt';
 }
 (function(){
   const a = document.getElementById('backlink');
@@ -1758,14 +1772,34 @@ function decryptAreaURL(){
   });
 })();
 
-// 彻底关闭大屏窗口：只有经 CodeScreen 反代访问时才有这个能力
+// 彻底关闭大屏窗口：
+//  · 经 CodeScreen 反代 → 交给反代（/api/board/close）
+//  · --app 全屏窗口（appwin=1）→ 窗口没标题栏、任务栏也没图标，
+//    浏览器自己的 window.close() 关不掉，走本地 /api/screen/close 由服务端发 WM_CLOSE
+//  · 普通浏览器标签页 → 不提供（关了也是关用户的浏览器标签，没意义）
 (function(){
   const btn = document.getElementById('btnQuit');
   if(!btn) return;
   const viaBoard = location.pathname.indexOf('/wa/') === 0;
-  if(!viaBoard){ btn.disabled = true; btn.title = '直连 7890 时不可用，请经大屏访问'; btn.style.opacity = '.4'; btn.style.cursor = 'default'; return; }
+  const inApp = isAppWindow();
+  if(!viaBoard && !inApp){
+    btn.disabled = true;
+    btn.title = '当前是浏览器标签页，直接关标签页即可';
+    btn.style.opacity = '.4'; btn.style.cursor = 'default';
+    return;
+  }
   btn.addEventListener('click', async () => {
-    try { await fetch(apiUrl('/api/board/close')); } catch(e){}
+    if(viaBoard){
+      try { await fetch(apiUrl('/api/board/close')); } catch(e){}
+      return;
+    }
+    btn.disabled = true; btn.textContent = '正在关闭…';
+    try { await fetch(apiUrl('/api/screen/close?ts=' + Date.now()), {cache:'no-store'}); } catch(e){}
+    // 兜底：个别系统上服务端关不掉（非 Windows），再试一次窗口自关
+    setTimeout(() => {
+      try { window.close(); } catch(e){}
+      btn.disabled = false; btn.textContent = '✕ 关闭';
+    }, 700);
   });
 })();
 
@@ -1837,6 +1871,11 @@ async function loop(){
 async function autoRefresh(){
   const acct = (LAST_ACCT || '').trim();
   if(!acct) return;
+  // 服务端已在自动同步：这里不要再补一刀。
+  // 两个客户端（大屏窗口 + 浏览器标签）各自触发刷新时，会抢同一个明文库的
+  // 文件锁 → 增量替换失败 → 两边同时显示「同步异常」。
+  // 由服务端守护线程统一节奏（默认 20s），多开几个页面也互不影响。
+  if(SRV_SYNC) return;
   try{
     // 服务端后台异步执行，这里只是「触发 + 稍后看结果」
     await api('api/refresh?account=' + encodeURIComponent(acct));

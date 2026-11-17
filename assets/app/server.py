@@ -9,6 +9,7 @@ WeChatDataAnalysis 精简版 · 本地只读分析服务（纯标准库 + pycryp
 import os
 import sys
 import json
+import time
 import threading
 import urllib.parse
 import webbrowser
@@ -78,6 +79,10 @@ _DECRYPT = {
 }
 _DECRYPT_LOCK = threading.Lock()
 
+# 大屏窗口拉起：3 秒内重复点击只当一次（否则浏览器里连点会一屏堆好几个窗口）
+_SCREEN_LOCK = threading.Lock()
+_SCREEN_LAST = {"at": 0.0}
+
 # 增量刷新器：只重新解密变化的页，让大屏始终显示最新消息
 REFRESHER = refreshmod.Refresher(DECRYPTED_DIR)   # DECRYPTED_DIR 已由 _resolve_dirs() 就绪
 
@@ -93,7 +98,8 @@ _QR_LOCK = threading.Lock()
 # 这里起一个守护线程：周期性做增量解密（只解变化的页，秒级），
 # 解完就失效缓存并重建会话列表，大屏下一轮轮询就能看到新消息。
 _AUTO_REFRESH = {"running": False, "last": 0, "changed": 0, "cycles": 0,
-                 "last_error": "", "interval": 20, "stats_marked_at": 0}
+                 "last_error": "", "err_streak": 0, "interval": 20,
+                 "stats_marked_at": 0}
 _AUTO_REFRESH_LOCK = threading.Lock()
 
 
@@ -128,14 +134,23 @@ def start_auto_refresh(interval=20):
                                 if f.get("error"):
                                     err = "%s: %s" % (f.get("file"), f.get("error"))
                                     break
-                        if res.get("ok"):
-                            _AUTO_REFRESH["last_error"] = err[:200]
+                        if res.get("ok") and not err:
+                            _AUTO_REFRESH["err_streak"] = 0
+                            _AUTO_REFRESH["last_error"] = ""
                         else:
-                            _AUTO_REFRESH["last_error"] = (err or "刷新失败")[:200]
+                            # 单轮失败很常见：微信正在写某个页、读者正好占着明文库，
+                            # os.replace 抢不到空档就会报一次，下一轮（20s 后）通常自愈。
+                            # 所以**连续 2 轮**失败才在界面上报「同步异常」，
+                            # 否则两三个页面同时开着就会一闪一闪地变红，看着像坏了。
+                            _AUTO_REFRESH["err_streak"] += 1
+                            if _AUTO_REFRESH["err_streak"] >= 2:
+                                _AUTO_REFRESH["last_error"] = (err or "刷新失败")[:200]
                 __import__("time").sleep(_AUTO_REFRESH["interval"])
             except Exception as e:
                 with _AUTO_REFRESH_LOCK:
-                    _AUTO_REFRESH["last_error"] = str(e)[:200]
+                    _AUTO_REFRESH["err_streak"] += 1
+                    if _AUTO_REFRESH["err_streak"] >= 2:
+                        _AUTO_REFRESH["last_error"] = str(e)[:200]
                     _AUTO_REFRESH["last"] = __import__("time").time()
                 __import__("time").sleep(_AUTO_REFRESH["interval"])
 
@@ -1189,15 +1204,40 @@ class Handler(BaseHTTPRequestHandler):
             # 任务栏不显示浏览器图标，全程不弹任何控制台窗口）。
             # 由**服务进程**来拉起 —— 服务在交互式会话且脱离沙箱 Job Object，
             # 浏览器才能长期存活（从命令行拉起会随调用方退出被回收）。
+            #
+            # 也是首页「📺 大屏」按钮的正路：无论在浏览器标签页还是大屏窗口里点，
+            # 都由这里判断「已有窗口就提到前台 / 没有才新开」，不会开成浏览器标签页。
+            with _SCREEN_LOCK:
+                now = time.time()
+                dup = (now - _SCREEN_LAST["at"]) < 3.0
+                if not dup:
+                    _SCREEN_LAST["at"] = now
+
             def _open_screen():
                 try:
                     import launch_big
-                    launch_big.open_window()
-                except Exception:
-                    pass
+                    url = launch_big.add_appwin(launch_big.DEFAULT_URL)
+                    # 记到 wa_stdout.log：出问题（比如窗口地址被改坏）时能直接对账
+                    print("[大屏] 拉起窗口: %s" % url, flush=True)
+                    launch_big.open_window(url)
+                except Exception as e:
+                    print("[大屏] 拉起失败: %r" % (e,), flush=True)
 
-            threading.Thread(target=_open_screen, daemon=True).start()
-            return send_json(self, {"ok": True, "started": True})
+            if not dup:
+                threading.Thread(target=_open_screen, daemon=True).start()
+            return send_json(self, {"ok": True, "started": True, "dedup": dup})
+
+        if path == "/api/screen/close":
+            # 关掉大屏的 --app 窗口。它没有标题栏、任务栏也没图标，
+            # 直连 7890 时前端自己关不掉，只能由服务端按窗口标题发 WM_CLOSE。
+            ok = False
+            try:
+                import launch_big
+                ok = launch_big.close_window()
+            except Exception:
+                ok = False
+            return send_json(self, {"ok": ok, "note": "" if ok else
+                                    "未找到大屏窗口（或当前系统不支持），可用 Alt+F4 / Cmd+Q 关闭"})
 
         if path == "/api/auto":
             # 一键闭环：探测本机加密账号 → 用给定密钥或尽力从进程提密钥 → 解密 → 加载
@@ -1835,6 +1875,7 @@ class Handler(BaseHTTPRequestHandler):
                     "changed": _AUTO_REFRESH["changed"],
                     "cycles": _AUTO_REFRESH["cycles"],
                     "last_error": _AUTO_REFRESH["last_error"],
+                    "err_streak": _AUTO_REFRESH.get("err_streak", 0),
                 },
             })
 

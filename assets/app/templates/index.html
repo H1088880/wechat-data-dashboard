@@ -361,6 +361,18 @@ async function doDecrypt(){
   refreshStatus(); loadConversations();
 }
 async function openBigScreen(){
+  // ① 就在大屏的 --app 窗口里（地址带 appwin=1，launch_big 加的标记）：
+  //    同一个窗口跳回去。绝不能 window.open —— 那样会开成普通浏览器标签页，
+  //    原来那个没标题栏、任务栏也没图标的大屏窗口就"找不到了"。
+  let inApp = false;
+  try { inApp = new URLSearchParams(location.search).get('appwin') === '1'; } catch(e){}
+  if(inApp){
+    const qs = new URLSearchParams(location.search);
+    qs.set('appwin', '1');
+    location.href = apiUrl('/bigscreen.html') + '?' + qs.toString();
+    return;
+  }
+
   const cfg=await api('/api/config');
   let base=((cfg&&cfg.bigscreen)||'').trim().replace(/\/+$/,'');
   // 同源优先：页面从哪个地址打开，大屏就走哪个地址（7890 直连、局域网 IP、反代都自动对）。
@@ -381,8 +393,6 @@ async function openBigScreen(){
   // 入口 URL 必须跟当前页面的访问方式一致，否则会 404：
   //  · 经 CodeScreen 反代(/wa/)打开 → 大屏也走反代，保持 PIN 保护与窗口控制
   //  · 直连 7890 打开             → 走 /bigscreen.html
-  // （之前无论哪种都硬拼 /wa/bigscreen.html，而 7890 自身没有 /wa/ 路由，
-  //   点进去就是 {"error":"not found"}）
   const via = location.pathname.indexOf('/wa/') === 0;
   let url;
   if(via){
@@ -396,6 +406,15 @@ async function openBigScreen(){
   }else{
     url = '/bigscreen.html';
   }
+
+  // ② 普通浏览器里点：让服务端拉起真正的 --app 全屏窗口（无地址栏/标签页）。
+  //    已有大屏窗口时服务端只会把它提到前台，不会越点越多。
+  //    服务端不可用（纯静态打开等）才退回 window.open。
+  try{
+    const r = await fetch(apiUrl('/api/screen?ts=' + Date.now()), {cache:'no-store'});
+    const j = await r.json();
+    if(j && (j.started || j.ok)) return;
+  }catch(e){}
   window.open(url,'_blank');
 }
 

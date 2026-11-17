@@ -47,11 +47,75 @@ DEFAULT_URL = "http://127.0.0.1:%d/bigscreen.html" % WA_PORT
 if _PLAT and _PLAT != "wechat":
     DEFAULT_URL += "?plat=" + _PLAT
 # 大屏窗口标题里的特征串（用于 Win32 定位窗口，Chrome 不保证窗口挂在 browser 进程上）
-TITLE_HINT = "微信数据分析"
+# 必须够严：解密页的标题是「微信数据分析 · 精简版（只读）」，如果用宽泛的
+# 「微信数据分析」，会把普通浏览器里开着的解密页当成大屏窗口「聚焦」过去。
+TITLE_HINT = "微信数据分析 · 大屏"
 
 CREATE_NO_WINDOW = 0x08000000
 CREATE_NEW_PROCESS_GROUP = 0x00000200
 DETACHED_PROCESS = 0x00000008
+
+
+def add_appwin(url):
+    """
+    给大屏地址打上 appwin=1 标记。
+
+    为什么需要：--app 窗口里点「← 返回解密」是**同一个窗口**导航到首页的，
+    此时窗口已经不在大屏页了。首页拿到 appwin=1 才知道「点📺大屏应在本窗口
+    跳回去」，而不是 window.open 开出一个普通浏览器标签页（那样就丢了大屏窗口，
+    窗口没标题栏、任务栏也没图标，用户会以为它消失了）。
+    非大屏地址不加，避免污染任意 --url。
+    """
+    if not url or "bigscreen" not in url or "appwin=1" in url:
+        return url
+    return url + ("&" if "?" in url else "?") + "appwin=1"
+
+
+# ------------------------------------------------------------------ Windows 窗口
+def focus_existing(timeout=0.8):
+    """
+    已有大屏窗口就把它叫到前台，返回 hwnd；没有则返回 0。
+
+    只在 Windows 上做（靠标题匹配）。这样在浏览器标签页里点「📺 大屏」
+    是「切回那个全屏窗口」，不会越点越多。
+    """
+    if not env.IS_WIN:
+        return 0
+    try:
+        hwnd, _how = _win32_find_window(0, TITLE_HINT, timeout=timeout)
+    except Exception:
+        return 0
+    if not hwnd:
+        return 0
+    try:
+        import ctypes
+        u = ctypes.windll.user32
+        u.ShowWindow(hwnd, 9)          # SW_RESTORE：最小化过也能叫回来
+        _win32_prepare(hwnd)           # 重新铺满 + 去边框
+        u.SetForegroundWindow(hwnd)
+    except Exception:
+        return 0
+    return hwnd
+
+
+def close_window():
+    """
+    按窗口标题关闭大屏窗口，返回是否发出关闭请求。
+
+    必要性：--app 窗口没有标题栏，铺满全屏后又从任务栏隐藏了图标，
+    直连 7890 时前端根本关不掉，只能 Alt+F4。服务端替它发 WM_CLOSE。
+    """
+    if not env.IS_WIN:
+        return False
+    try:
+        import ctypes
+        hwnd, _how = _win32_find_window(0, TITLE_HINT, timeout=0.4)
+        if not hwnd:
+            return False
+        ctypes.windll.user32.PostMessageW(hwnd, 0x0010, 0, 0)   # WM_CLOSE
+        return True
+    except Exception:
+        return False
 
 
 # ------------------------------------------------------------------ 浏览器
@@ -238,7 +302,7 @@ def _win32_find_window(pid, title_hint="", timeout=12.0):
             return True
         p = wintypes.DWORD()
         u.GetWindowThreadProcessId(hwnd, ctypes.byref(p))
-        if p.value == pid:
+        if pid and p.value == pid:
             hits_pid.append(hwnd)
         if title_hint:
             n = u.GetWindowTextLengthW(hwnd)
@@ -271,7 +335,13 @@ def open_window(url=None, fullscreen=True, wait=12.0):
     脱离工具/沙箱的进程组与 Job Object，所以拉起的浏览器能长期存活。
     （从命令行/工具链直接调用时，调用方一退出浏览器就可能被回收。）
     """
-    url = url or DEFAULT_URL
+    url = add_appwin(url or DEFAULT_URL)
+    # 已有大屏窗口就只做「提到前台」——避免用户反复点导致一屏堆好几个窗口
+    if "bigscreen" in url:
+        hwnd = focus_existing()
+        if hwnd:
+            return 0, hwnd, "focus"
+
     browser = find_browser()
     if not browser:
         return 0, 0, "no-browser"
@@ -354,9 +424,12 @@ def main():
     print("分析服务 7890: %s" % ("已在运行" if up else "未能启动"))
 
     pid, hwnd, how = open_window(url=url, fullscreen=fullscreen)
-    if not pid:
+    if not pid and not hwnd:
         print("打开失败：未找到 Chrome/Edge/Chromium，请手动访问 %s" % url)
         return 1
+    if how == "focus":
+        print("大屏窗口已在运行，已切到前台")
+        return 0
 
     w, h = screen_size()
     print("已拉起大屏: %s (pid=%d, %dx%d)" % (url, pid, w, h))
