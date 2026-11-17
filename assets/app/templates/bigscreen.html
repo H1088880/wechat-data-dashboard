@@ -11,7 +11,11 @@
     --bg:#070a11; --panel:#0d1420; --panel2:#111a28; --line:rgba(255,255,255,.08);
     --fg:#e9eef8; --dim:#8fa0ba; --dim2:#5d6c85;
     --accent:#2dd4bf; --accent2:#38bdf8; --warn:#fbbf24; --bad:#f87171;
-    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    /* 等宽栈只覆盖西文；中文必须显式补一个无衬线中文字体，
+       否则会落到 generic monospace 的中文回退（Windows 上是宋体/SimSun），
+       小字号 + 粗体时笔画糊成一团（"成""键"这类多笔字最明显）。 */
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,"Microsoft YaHei UI","Microsoft YaHei","PingFang SC","Hiragino Sans GB","Noto Sans CJK SC","Source Han Sans SC",monospace;
+    --sans:-apple-system,"Segoe UI",system-ui,"Microsoft YaHei UI","Microsoft YaHei","PingFang SC",sans-serif;
   }
   *{box-sizing:border-box}
   html,body{margin:0;height:100%}
@@ -449,9 +453,9 @@
   #srHead{display:flex;align-items:center;gap:14px;margin-bottom:14px}
   #srHead .q{font-size:17px;font-weight:700}
   #srHead .n{font-family:var(--mono);font-size:12.5px;color:var(--accent)}
-  #srHead .digest{font-family:var(--mono);font-size:13px;cursor:pointer;color:#0b1a12;
+  #srHead .digest{font-family:var(--sans);font-size:13px;cursor:pointer;color:#0b1a12;
     background:linear-gradient(180deg,#43d39a,#1f9d6b);border:1px solid #2ec08a;
-    border-radius:9px;padding:7px 15px;font-weight:700}
+    border-radius:9px;padding:7px 15px;font-weight:600;letter-spacing:.2px}
   #srHead .digest:hover{filter:brightness(1.1)}
   #srHead .digest:disabled{opacity:.5;cursor:default;filter:none}
   #srHead .x{margin-left:auto;cursor:pointer;color:var(--dim);font-family:var(--mono);font-size:13px;
