@@ -418,6 +418,17 @@ async function openBigScreen(){
   window.open(url,'_blank');
 }
 
+// 在大屏的 --app 窗口里打开首页时（launch_big 带过来的 appwin=1），
+// 这个按钮实际是「回大屏」，改个文案免得用户以为还要再开一个窗口
+(function(){
+  try{
+    if(new URLSearchParams(location.search).get('appwin') === '1'){
+      const b = document.getElementById('bigBtn');
+      if(b){ b.textContent = '📺 返回大屏'; b.title = '在同一个窗口里回到大屏'; }
+    }
+  }catch(e){}
+})();
+
 // ② 浏览
 // silent=true：后台轮询时调用。只在内容真正变化时才重绘，
 // 避免每 15 秒闪一次、也避免把用户正在选中的高亮和滚动位置冲掉。
