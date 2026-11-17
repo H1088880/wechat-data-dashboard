@@ -16,6 +16,24 @@
 启动器会自动装依赖 → 起服务(7890) → 等服务就绪 → 弹全屏大屏。
 打开 `http://127.0.0.1:7890/index.html` 可导入密钥、完成解密。
 
+## 说这三句就够了
+
+不需要记任何命令。装完之后，对 Agent 说：
+
+1. **装**：帮我安装这个 skill：https://github.com/H1088880/wechat-data-dashboard
+2. **验**（可选但推荐）：跑 `python scripts/preflight.py --imports`，把结果贴给我
+3. **开**：帮我打开微信数据分析大屏
+
+卡在"需要密钥"时补一句：**不用管密钥，直接点「⚡ 一键探测 + 解密 + 加载」**——它会复用本机密钥环，缺的从运行中的微信进程内存只读提取，再逐库解密。
+
+想一次说完，就把这整段发给对方：
+
+> 帮我安装这个 skill：https://github.com/H1088880/wechat-data-dashboard
+> 装完跑 `python scripts/preflight.py --imports` 自检，通过后重启客户端，再帮我打开微信数据分析大屏。
+> 如果卡在"需要密钥"，直接点「⚡ 一键探测 + 解密 + 加载」，不用填密钥。
+
+（更多指令与 Agent 行为对照见 `SKILL.md` 的「一句话指令」「指令映射」两节。）
+
 ## 给 AI 使用
 
 对能操作本机文件的 Agent（WorkBuddy / Claude Code / Cursor 等）说：
