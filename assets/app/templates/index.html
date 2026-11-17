@@ -362,7 +362,22 @@ async function doDecrypt(){
 }
 async function openBigScreen(){
   const cfg=await api('/api/config');
-  const base=((cfg&&cfg.bigscreen)||'').replace(/\/+$/,'');
+  let base=((cfg&&cfg.bigscreen)||'').trim().replace(/\/+$/,'');
+  // 同源优先：页面从哪个地址打开，大屏就走哪个地址（7890 直连、局域网 IP、反代都自动对）。
+  // 配置里的 bigscreen 只在「确实是别处」时才用，并排除两种坑：
+  //   ① 空值 —— 老版本默认写死 http://127.0.0.1:7391（开发机的 CodeScreen 反代入口，
+  //      要输 PIN 码），别人装完点"大屏"必然打不开；
+  //   ② 本机回环地址但端口和当前页面不同 —— 典型的"别人机器上残留了我这边的 config.json"。
+  if(base){
+    try{
+      const b=new URL(base);
+      const loop=['127.0.0.1','localhost','[::1]','0.0.0.0'].indexOf(b.hostname)>=0;
+      if(loop && b.origin!==location.origin){
+        console.warn('[大屏] 忽略配置里的回环地址（端口与当前页面不一致）：'+base);
+        base='';
+      }
+    }catch(e){ base=''; }
+  }
   // 入口 URL 必须跟当前页面的访问方式一致，否则会 404：
   //  · 经 CodeScreen 反代(/wa/)打开 → 大屏也走反代，保持 PIN 保护与窗口控制
   //  · 直连 7890 打开             → 走 /bigscreen.html

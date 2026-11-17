@@ -137,9 +137,9 @@ author: 云帆-H1088880
 
 ### references/ — 按需加载的知识
 - `architecture.md` — 模块职责、路由、各平台数据目录、启动/守护机制。
-- `pitfalls.md` — 12 条已验证修复（消息排序/create_time 无索引、ClearType 中文发虚、
+- `pitfalls.md` — 13 条已验证修复（消息排序/create_time 无索引、ClearType 中文发虚、
   全屏窗口 z 序、watchdog 双实例、刷新过快反更慢、os.replace 占用、二维码乱码、
-  漏打包导致"一键提取密钥"全平台失败等）。排错优先读。
+  漏打包导致"一键提取密钥"全平台失败、大屏链接指向开发机反代端口等）。排错优先读。
 - `platforms.md` — 飞书/钉钉/企微授权差异与二维码实现。
 
 ### scripts/ — 通用工具
