@@ -268,6 +268,27 @@ def ensure_index(data_dir, db, background=True, force=False):
     return _build_sync(data_dir, db, force)
 
 
+def _fts_query(q):
+    """把用户输入转成**安全的** FTS5 查询串。
+
+    FTS5 的 MATCH 接收的是查询语法，不是字面量：`-` `:` `+` `*` `"` `(` `)`
+    以及 AND / OR / NOT 都是操作符。用户搜「personnel-registration」会被解析成
+    「在名为 registration 的列里搜 personnel」，直接抛
+    `no such column: registration`；搜「C++」抛 `syntax error near "+"`。
+
+    这些词在真实聊天里很常见（英文型号、时间「134:8099」、代码片段）。
+    以前整段 except 把这些异常吞掉，连 LIKE 兜底都没走到，于是**静默返回 0 条**，
+    用户看到的就是"这个词搜不到"。
+
+    这里把每个空白分隔的词包成短语（内部 `"` 按 FTS5 规则双写），
+    特殊字符一律降级为字面量；多词之间仍用 AND，保持原有语义。
+    """
+    toks = [t for t in (q or "").split() if t]
+    if not toks:
+        return None
+    return " AND ".join('"' + t.replace('"', '""') + '"' for t in toks)
+
+
 def search(q, limit=200, talker=None, data_dir=None):
     """在索引里搜索。返回与 WeChatDB.search 相同结构的 dict 列表。"""
     if not q:
@@ -281,18 +302,22 @@ def search(q, limit=200, talker=None, data_dir=None):
         return []
     out = []
     try:
-        if len(q) >= 3 and _has_fts(c):
+        fq = _fts_query(q)
+        if len(q) >= 3 and fq and _has_fts(c):
             sql = "SELECT m.talker,m.name,m.content,m.ctime,m.is_send FROM fts f JOIN msgs m ON m.id=f.rowid WHERE fts MATCH ?"
-            params = [q]
+            params = [fq]
             if talker:
                 sql += " AND m.talker=?"
                 params.append(talker)
             sql += " ORDER BY m.ctime DESC LIMIT ?"
             params.append(limit)
-            for r in c.execute(sql, params):
-                out.append({"talker": r[0] or "", "name": r[1] or "", "content": r[2] or "",
-                            "time": r[3] or 0, "isSend": int(r[4] or 0)})
-        if not out:  # <3 字符 或 FTS 无结果 → 单表 LIKE 兜底
+            try:
+                for r in c.execute(sql, params):
+                    out.append({"talker": r[0] or "", "name": r[1] or "", "content": r[2] or "",
+                                "time": r[3] or 0, "isSend": int(r[4] or 0)})
+            except sqlite3.Error:
+                out = []      # FTS 语法/索引异常 → 落回 LIKE，绝不吞成 0 条
+        if not out:  # <3 字符、FTS 无结果或 FTS 报错 → 单表 LIKE 兜底
             like = f"%{q}%"
             sql = "SELECT talker,name,content,ctime,is_send FROM msgs WHERE content LIKE ?"
             params = [like]
@@ -301,11 +326,12 @@ def search(q, limit=200, talker=None, data_dir=None):
                 params.append(talker)
             sql += " ORDER BY ctime DESC LIMIT ?"
             params.append(limit)
-            for r in c.execute(sql, params):
-                out.append({"talker": r[0] or "", "name": r[1] or "", "content": r[2] or "",
-                            "time": r[3] or 0, "isSend": int(r[4] or 0)})
-    except Exception:
-        pass
+            try:
+                for r in c.execute(sql, params):
+                    out.append({"talker": r[0] or "", "name": r[1] or "", "content": r[2] or "",
+                                "time": r[3] or 0, "isSend": int(r[4] or 0)})
+            except sqlite3.Error:
+                pass
     finally:
         c.close()
     return out
