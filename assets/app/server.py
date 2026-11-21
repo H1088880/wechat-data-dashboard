@@ -1197,7 +1197,16 @@ class Handler(BaseHTTPRequestHandler):
 
         # ---- 路由 ----
         if path == "/api/detect":
-            return send_json(self, admod.detect_all(extra=CFG.get("data")))
+            det = admod.detect_all(extra=CFG.get("data"))
+            # 前端据此区分「没数据」/「已加载」/「探测不到但已配置」，不再一律报错
+            det["current"] = CURRENT_DIR
+            det["config_data"] = CFG.get("data")
+            try:
+                import env as _env
+                det["wechat_roots"] = _env.wechat_roots()
+            except Exception:
+                det["wechat_roots"] = []
+            return send_json(self, det)
 
         if path == "/api/screen":
             # 在独立窗口中打开大屏（web 形态：--app 无地址栏，铺满全屏，
@@ -1244,12 +1253,34 @@ class Handler(BaseHTTPRequestHandler):
             key = g("key") or CFG.get("key")
             enc = admod.auto_pick_encrypted()
             if not enc:
+                # 没有加密库 ≠ 没有数据。已加载的数据源、配置目录、已解密产物都要先复用，
+                # 绝不能把「微信没运行 / 扫描器没认出目录」误报成「未检测到本机微信数据」。
+                if CURRENT_DIR and os.path.isdir(CURRENT_DIR):
+                    return send_json(self, {"ok": True, "dir": CURRENT_DIR,
+                                            "version": get_db().version, "source": "current"})
                 dec = admod.auto_pick_our_decrypted(extra=CFG.get("data"))
+                cfg_data = CFG.get("data")
+                if not dec and cfg_data and os.path.isdir(cfg_data) and admod.looks_wechat_deep(cfg_data):
+                    dec = cfg_data
                 if dec:
-                    get_db(dec)
-                    ensure_conv_cache(dec)
-                    return send_json(self, {"ok": True, "dir": dec, "version": get_db().version, "source": "decrypted"})
-                return send_json(self, {"ok": False, "reason": "未检测到本机微信数据，请确认微信已登录，或手动指定目录。"})
+                    try:
+                        get_db(dec)
+                        ensure_conv_cache(dec)
+                        return send_json(self, {"ok": True, "dir": dec,
+                                                "version": get_db().version, "source": "decrypted"})
+                    except Exception as e:
+                        return send_json(self, {"ok": False, "error": "已解密目录加载失败：%s" % e})
+                try:
+                    import env as _env
+                    roots = _env.wechat_roots()
+                except Exception:
+                    roots = []
+                return send_json(self, {
+                    "ok": False, "reason_code": "no_local_wechat_data",
+                    "reason": "未检测到本机微信数据，请确认微信已登录，或手动指定目录。",
+                    "wechat_roots": roots,
+                    "hint": "若本机已有解密好的库，可用 /api/load?dir=... 直接加载；微信未运行时不会自动发现加密库。"
+                })
             out_dir = os.path.join(DECRYPTED_DIR, os.path.basename(enc.rstrip("/\\")))
             if not key:
                 # 没给密钥：不再直接甩"需要密钥"。

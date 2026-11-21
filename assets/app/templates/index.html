@@ -60,6 +60,8 @@
   .stat .s small{color:var(--sub)}
   .tag{display:inline-block;background:#eef0f3;border-radius:6px;padding:2px 8px;margin:3px;font-size:12px}
   .hint{background:#fff8e6;border:1px solid #ffe2a8;color:#8a6d1a;padding:10px 12px;border-radius:8px;font-size:12px;margin-bottom:12px}
+  .conn-warn{background:#fff1f0;border:1px solid #ffccc7;color:#a8071a;padding:10px 12px;border-radius:8px;font-size:12px;margin-bottom:12px}
+  .conn-warn code{background:rgba(0,0,0,.05);padding:1px 5px;border-radius:4px}
   .ok{color:var(--main)} .err{color:#e54545}
   pre{white-space:pre-wrap;word-break:break-all;background:#f7f8fa;padding:10px;border-radius:8px;max-height:200px;overflow:auto;font-size:12px}
   .hidden{display:none}
@@ -86,6 +88,7 @@
 <main>
   <!-- 解密 -->
   <section id="tab-decrypt">
+    <div id="connWarn" class="conn-warn hidden"></div>
     <div class="hint">全程只读分析「你自己的」微信本地数据：不连微信、不发消息、不修改任何文件。解密后的库写入 <code>decrypted/</code> 目录，仅供本工具读取。</div>
     <div class="card">
       <h2>方式一：一键自动解密（推荐 · 闭环）</h2>
@@ -100,12 +103,16 @@
     <div class="card">
       <h2>方式二：手动指定目录 + 密钥</h2>
       <div class="row">
-        <select id="dirSel"><option value="">— 选择检测到的本机微信加密目录 —</option></select>
+        <select id="dirSel"><option value="">— 选择检测到的数据目录（含已解密） —</option></select>
         <button class="ghost" onclick="detectDirs()">重新检测</button>
       </div>
       <div class="row" style="margin-top:10px">
-        <input type="text" id="keyInput" placeholder="64位十六进制密钥，例如 a1b2...（32字节）" style="min-width:380px">
+        <input type="text" id="keyInput" placeholder="64位十六进制密钥，例如 a1b2...（32字节）；加载已解密目录时无需填写" style="min-width:380px">
         <button class="act" onclick="doDecrypt()">解密并加载</button>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <input type="text" id="manualDir" placeholder="手动填写已解密数据目录（无需密钥），例如 …\assets\app\decrypted\账号目录" style="min-width:480px">
+        <button class="ghost" onclick="loadManualDir()">直接加载目录</button>
       </div>
       <div id="decryptResult" class="muted" style="margin-top:10px"></div>
     </div>
@@ -265,23 +272,74 @@ function apiUrl(p){
   return p;
 }
 
-async function api(p){const r=await fetch(apiUrl(p));if(!r.ok)return {};return r.json();}
+// 统一 API：网络失败必须能区分出来，不能一律误报成"没检测到微信数据"
+async function api(p){
+  try{
+    const r=await fetch(apiUrl(p));
+    if(!r.ok)return {__error:'本地服务返回 HTTP '+r.status};
+    return await r.json();
+  }catch(e){return {__error:'无法连接本地分析服务：'+(e&&e.message||e)};}
+}
+function showConnWarn(msg){
+  const el=$('#connWarn');if(!el)return;
+  if(!msg){el.classList.add('hidden');el.innerHTML='';return;}
+  el.classList.remove('hidden');
+  el.innerHTML='⚠️ '+esc(msg)+'。请确认本机分析服务已启动（默认 <code>http://127.0.0.1:7890</code>）；'
+    +'若从远程网页打开本页，请在网址后加 <code>?api=http://127.0.0.1:7890</code> 指向本机服务。';
+}
 async function refreshStatus(){
   try{const s=await api('/api/status');
+    if(s.__error){$('#status').textContent='本地服务未连接';return;}
     let txt='数据目录：'+(s.dir?shortDir(s.dir):'未加载');
     if(s.version)txt+=` · 微信${s.version}.x`;
     if(s.conv_count!=null)txt+=` · ${s.conv_count}会话`;
     $('#status').textContent=txt+(s.has_msg?' ✓':'');}catch(e){}
 }
-function shortDir(d){const p=String(d).split(/[\\/]/);return '…'+p.slice(-2).join('/');}
+function shortDir(d){const p=String(d||'').split(/[\\/]/);return '…'+p.slice(-2).join('/');}
+function baseName(p){const a=String(p||'').split(/[\\/]/).filter(Boolean);return a[a.length-1]||String(p||'');}
 
 // ① 解密
 async function detectDirs(){
   const d=await api('/api/detect');
-  const sel=$('#dirSel');sel.innerHTML='<option value="">— 选择检测到的微信数据目录 —</option>';
-  (d.encrypted||[]).forEach(x=>{const o=document.createElement('option');o.value=x.msg_dir;
-    o.textContent=`${x.account}  (${x.db_count}个库) → ${x.msg_dir}`;sel.appendChild(o);});
-  if(!(d.encrypted||[]).length)$('#decryptResult').innerHTML='<span class="muted">未检测到本机微信数据目录。请确认微信已登录，或在「浏览」页用「加载示例数据」体验。</span>';
+  const sel=$('#dirSel');
+  sel.innerHTML='<option value="">— 选择数据目录（加密 / 已解密） —</option>';
+  if(d.__error){
+    showConnWarn(d.__error);
+    $('#decryptResult').innerHTML='<span class="err">无法读取本机数据目录：'+esc(d.__error)+'</span>';
+    return;
+  }
+  showConnWarn('');
+  const enc=d.encrypted||[], dec=d.decrypted||[];
+  const seen=new Set();
+  const add=(value,label)=>{const k=value.toLowerCase();if(seen.has(k))return;seen.add(k);
+    const o=document.createElement('option');o.value=value;o.textContent=label;sel.appendChild(o);};
+  enc.forEach(x=>add(x.msg_dir,`${x.account}（加密 · ${x.db_count}库）→ ${shortDir(x.msg_dir)}`));
+  dec.forEach(x=>add('plain|'+x.dir,`${baseName(x.dir)}（已解密 · ${x.db_count}库）→ ${shortDir(x.dir)}`));
+  // 已加载但没被扫描器认出来的目录，也要给用户一个可选项
+  if(d.current&&!seen.has(('plain|'+d.current).toLowerCase())) add('plain|'+d.current,`${baseName(d.current)}（当前已加载）→ ${shortDir(d.current)}`);
+  if(enc.length||dec.length){
+    $('#decryptResult').innerHTML='<span class="muted">检测到 '+enc.length+' 个加密目录、'+dec.length+' 个已解密目录。'
+      +'已解密目录无需密钥：选中后直接点「解密并加载」即可。</span>';
+  }else if(d.current){
+    $('#decryptResult').innerHTML='<span class="ok">✓ 当前已加载数据：'+esc(shortDir(d.current))+'，可直接去「大屏 / 浏览」查看。</span>';
+  }else{
+    const roots=(d.wechat_roots||[]).map(shortDir).join('、')||'常见微信目录';
+    $('#decryptResult').innerHTML='<span class="muted">未检测到本机微信数据目录（已查：'+esc(roots)+'）。'
+      +'若微信未登录、或数据不在默认位置，请在下方手动填写已解密数据目录并点「直接加载目录」；只有加密库才需要密钥。</span>';
+  }
+}
+async function loadManualDir(){
+  const dir=$('#manualDir').value.trim();
+  if(!dir){$('#decryptResult').innerHTML='<span class="err">请先填写数据目录路径。</span>';return;}
+  return loadDirDirect(dir);
+}
+async function loadDirDirect(dir){
+  $('#decryptResult').innerHTML='<span class="muted">正在加载：'+esc(shortDir(dir))+'…</span>';
+  const r=await api('/api/load?dir='+encodeURIComponent(dir));
+  if(r.__error){showConnWarn(r.__error);$('#decryptResult').innerHTML='<span class="err">加载失败：'+esc(r.__error)+'</span>';return;}
+  if(r.ok){$('#decryptResult').innerHTML='<span class="ok">✓ 已加载目录：'+esc(shortDir(r.dir))+'，去「大屏 / 浏览」查看吧。</span>';
+    refreshStatus();loadConversations();}
+  else $('#decryptResult').innerHTML='<span class="err">加载失败：'+esc(r.error||'目录不可读或不是有效微信数据目录')+'</span>';
 }
 async function loadSample(){
   const r=await api('/api/sample');refreshStatus();
@@ -322,7 +380,20 @@ async function autoDecrypt(){
   $('#autoResult').innerHTML='<span class="muted">探测中…'+(key?'':'（未填密钥：先复用本机密钥环，缺的从微信进程内存补提取）')+'</span>';
   const url='/api/auto'+(key?'?key='+encodeURIComponent(key):'');
   let d={};
-  try{ d=await api(url); }catch(e){ d={reason:'请求失败：'+(e&&e.message||e)}; }
+  try{ d=await api(url); }catch(e){ d={__error:'请求失败：'+(e&&e.message||e)}; }
+  if(d.__error){
+    showConnWarn(d.__error);
+    $('#autoResult').innerHTML='<span class="err">'+esc(d.__error)+'</span>'
+      +'<div class="muted" style="margin-top:6px">这不是"没有微信数据"，而是本机分析服务没连上；'
+      +'服务启动后点此重试即可。已有解密库也可在下方手动填目录直接加载。</div>';
+    return;
+  }
+  if(d.ok&&!d.started){
+    $('#autoResult').innerHTML=`<span class="ok">✓ 已加载数据：${esc(shortDir(d.dir||''))}${d.source==='current'?'（当前数据源，无需重新解密）':''}</span>`
+      +'<div class="muted" style="margin-top:6px">可直接点右上角「大屏」查看，不必再解密。</div>';
+    refreshStatus(); loadConversations();
+    return;
+  }
   if(d.started){
     const p=await pollDecrypt('#autoResult');
     refreshStatus();
@@ -345,16 +416,30 @@ async function autoDecrypt(){
   }else if(d.busy){
     $('#autoResult').innerHTML='<span class="err">已有解密任务在进行中。</span>';
   }else{
-    $('#autoResult').innerHTML=`<span class="err">${d.reason||d.error||'自动探测失败'}</span>`;
+    let extra='';
+    if(d.reason_code==='no_local_wechat_data'){
+      extra='<div class="muted" style="margin-top:6px">如果本机已有解密好的库，请在下方「手动填写已解密数据目录」输入路径后点「直接加载目录」；'
+        +'若顶部状态栏已显示数据目录，则数据已经加载，直接去「大屏」查看即可。</div>';
+    }
+    $('#autoResult').innerHTML=`<span class="err">${esc(d.reason||d.error||'自动探测失败')}</span>`+extra;
   }
 }
 async function doDecrypt(){
-  const msg_dir=$('#dirSel').value, key=$('#keyInput').value.trim();
-  if(!msg_dir||!key){$('#decryptResult').innerHTML='<span class="err">请先选择数据目录并填写密钥。</span>';return;}
-  const r=await fetch(apiUrl('/api/decrypt'),{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({msg_dir,key})});
-  const j=await r.json();
-  if(j.error){$('#decryptResult').innerHTML=`<span class="err">${j.error}</span>`;return;}
+  let msg_dir=$('#dirSel').value; const key=$('#keyInput').value.trim();
+  if(!msg_dir){$('#decryptResult').innerHTML='<span class="err">请先选择数据目录。</span>';return;}
+  if(msg_dir.indexOf('plain|')===0){
+    // 已解密目录：无需密钥，直接加载
+    return loadDirDirect(msg_dir.slice(6));
+  }
+  if(!key){$('#decryptResult').innerHTML='<span class="err">加密目录需要先填写 64 位十六进制密钥；若已解密请选「已解密」目录。</span>';return;}
+  let j={};
+  try{
+    const r=await fetch(apiUrl('/api/decrypt'),{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({msg_dir,key})});
+    j=await r.json();
+  }catch(e){j={error:'无法连接本地分析服务：'+(e&&e.message||e)};}
+  if(j.__error){showConnWarn(j.__error);}
+  if(j.error){$('#decryptResult').innerHTML=`<span class="err">${esc(j.error)}</span>`;return;}
   const p=await pollDecrypt('#decryptResult');
   if(p.error){ $('#decryptResult').innerHTML=`<span class="err">解密失败：${p.error}</span>`; return; }
   $('#decryptResult').innerHTML=`<span class="ok">解密完成：${p.ok}/${p.total} 个库成功，已加载</span>`;

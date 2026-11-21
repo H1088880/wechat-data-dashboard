@@ -57,6 +57,30 @@ def _count_dbs(d):
         return 0
 
 
+def looks_wechat_deep(d, limit=30):
+    """更宽松的只读目录校验：扫描前 limit 个 .db，兼容扫描器没认出的表结构。
+
+    用于「配置里显式指定、但 _looks_wechat 没认出来」的兜底场景，
+    避免把已经解密好的目录误判成「本机没有微信数据」。
+    """
+    try:
+        dbs = sorted(f for f in os.listdir(d) if f.lower().endswith(".db"))
+    except Exception:
+        return False
+    keys = ("contact", "session", "favorite", "fav_db_item", "message", "msg", "chatname2id")
+    for f in dbs[:limit]:
+        try:
+            conn = sqlite3.connect(os.path.join(d, f), timeout=3)
+            tabs = {r[0] for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+            conn.close()
+            if any(t.lower() in keys or t.lower().startswith("msg_") for t in tabs):
+                return True
+        except Exception:
+            continue
+    return False
+
+
 # ---------------- 本机自己的加密微信数据 ----------------
 def scan_encrypted_accounts():
     """扫描本机微信数据根，返回加密账号目录（优先含 message*.db 的真实账号）。"""
